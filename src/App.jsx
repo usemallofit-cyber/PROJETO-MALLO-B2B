@@ -380,7 +380,7 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
     <div style={{ background: TOKENS.ink, color: TOKENS.ivory, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 20, flexWrap: "wrap", gap: 10 }}>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 19, letterSpacing: 0.5 }}>Catálogo B2B</div>
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        {isStaff && (
+      
           {isStaff && (
   <div style={{ display: "flex", background: TOKENS.inkSoft, borderRadius: 3, padding: 3 }}>
     <button onClick={() => setScreen("catalog")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "catalog" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Vitrine</button>
