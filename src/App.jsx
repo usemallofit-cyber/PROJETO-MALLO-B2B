@@ -468,7 +468,7 @@ function ProductCard({ p, showPrice, addToCart }) {
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div style={{ position: "relative", aspectRatio: "3/8", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ position: "relative", aspectRatio: "3/5", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {imgs[imgIdx] ? <img src={imgs[imgIdx]} alt={p.model} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={36} color={TOKENS.line} />}
         {imgs.length > 1 && (
           <>
@@ -1129,7 +1129,7 @@ function ProdutosAdmin({ products, setProducts }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 16 }}>
         {list.map((p) => (
           <div key={p.id} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
-            <div style={{ aspectRatio: "3/8", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ aspectRatio: "3/5", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {p.variants?.[0]?.images?.[0] ? <img src={p.variants[0].images[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={28} color={TOKENS.line} />}
             </div>
             <div style={{ padding: 12 }}>
