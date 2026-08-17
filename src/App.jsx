@@ -225,6 +225,20 @@ export default function App() {
   const persistClients = useCallback(async (next) => { setClients(next); await storageSet(STORE_KEYS.clients, next, true); }, []);
   const persistOrders = useCallback(async (next) => { setOrders(next); await storageSet(STORE_KEYS.orders, next, true); }, []);
 
+  function updateOrderStatus(orderId, newStatus) {
+    const next = orders.map((o) => o.id === orderId
+      ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
+      : o);
+    persistOrders(next);
+  }
+
+  function updateOrderStatus(orderId, newStatus) {
+    const next = orders.map((o) => o.id === orderId
+      ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
+      : o);
+    persistOrders(next);
+  }
+
   async function handleLogin(username) {
     const u = { username, ...users[username] };
     setSession(u);
@@ -268,11 +282,13 @@ export default function App() {
       const prod = products.find((p) => p.id === c.productId);
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0 };
     });
-    const record = {
+ const record = {
       id: uid("ord_"), date: new Date().toISOString(),
       clientName: selectedClient?.buyerName || session.name || session.username,
-      sellerName: session.name || session.username, sellerRole: session.role,
+      sellerName: session.name || session.username, sellerRole: session.role, sellerUsername: session.username,
       items,
+      status: "Enviado à fábrica",
+      statusLog: [{ status: "Enviado à fábrica", by: session.name || session.username, when: new Date().toISOString() }],
     };
     persistOrders([...orders, record]);
   }
@@ -293,11 +309,13 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} />
       ) : screen === "central" && session.role === "admincentral" ? (
-        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} />
+        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
         <RepClientsPanel clients={clients} setClients={persistClients} session={session} />
+      ) : screen === "rep-pedidos" && session.role === "representante" ? (
+        <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly />
       ) : (
         <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} />
       )}
@@ -396,6 +414,7 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
           <div style={{ display: "flex", background: TOKENS.inkSoft, borderRadius: 3, padding: 3 }}>
             <button onClick={() => setScreen("catalog")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "catalog" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Vitrine</button>
             <button onClick={() => setScreen("rep-clients")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "rep-clients" ? TOKENS.wine : "transparent", color: TOKENS.ivory, display: "flex", alignItems: "center", gap: 5 }}><Building2 size={12} /> Clientes</button>
+            <button onClick={() => setScreen("rep-pedidos")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "rep-pedidos" ? TOKENS.wine : "transparent", color: TOKENS.ivory, display: "flex", alignItems: "center", gap: 5 }}><Archive size={12} /> Pedidos</button>
           </div>
         )}
         {screen === "catalog" && (
@@ -794,10 +813,9 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients }) {
-  const [tab, setTab] = useState("produtos");
-  const tabs = [
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus }) {
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
+    { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
     { id: "login-clientes", label: "Login de Clientes", icon: Users },
     { id: "representantes", label: "Login de Representantes", icon: UserCheck },
@@ -817,6 +835,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
         })}
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} />}
+      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
       {tab === "representantes" && <ClientesAdmin users={users} setUsers={setUsers} role="representante" title="Login de Representantes" />}
@@ -827,10 +846,11 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
 }
 
 /* ---------------- ADMIN CENTRAL ---------------- */
-function AdminCentralPanel({ users, setUsers, products, setProducts, orders }) {
+function AdminCentralPanel({ users, setUsers, products, setProducts, orders, updateStatus }) {
   const [tab, setTab] = useState("funcionarios");
   const tabs = [
     { id: "funcionarios", label: "Login de Funcionários", icon: UserCog },
+    { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "ranking", label: "Ranking de Vendas", icon: TrendingUp },
     { id: "abc", label: "Curva ABC", icon: PieChart },
     { id: "estoque", label: "Estoque & Custos", icon: Archive },
@@ -852,6 +872,7 @@ function AdminCentralPanel({ users, setUsers, products, setProducts, orders }) {
         })}
       </div>
       {tab === "funcionarios" && <ClientesAdmin users={users} setUsers={setUsers} role="admin" title="Login de Funcionários" />}
+      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} />}
       {tab === "ranking" && <RankingAdmin products={products} orders={orders} />}
       {tab === "abc" && <ABCAdmin orders={orders} />}
       {tab === "estoque" && <EstoqueCustosAdmin products={products} setProducts={setProducts} />}
@@ -1083,6 +1104,55 @@ function RepClientsPanel({ clients, setClients, session }) {
       <div style={{ fontFamily: "Georgia, serif", fontSize: 24, color: TOKENS.ink, marginBottom: 4 }}>Meus Clientes</div>
       <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 22 }}>Clientes que você cadastra aqui ficam disponíveis para seleção nos seus pedidos, e também aparecem no Painel ADM da administração, filtrados pelo seu nome.</div>
       <ClientRegistryAdmin clients={clients} setClients={setClients} repScope={session.username} />
+    </div>
+  );
+}
+
+const ORDER_STATUSES = ["Enviado à fábrica", "Crédito liberado", "Crédito bloqueado", "Pedido em preparação", "Pedido enviado"];
+const ORDER_STATUS_COLORS = {
+  "Enviado à fábrica": { bg: "#E6F1FB", fg: "#0C447C" },
+  "Crédito liberado": { bg: "#EAF3DE", fg: "#27500A" },
+  "Crédito bloqueado": { bg: "#FCEBEB", fg: "#791F1F" },
+  "Pedido em preparação": { bg: "#FAEEDA", fg: "#633806" },
+  "Pedido enviado": { bg: "#EEEDFE", fg: "#3C3489" },
+};
+
+function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
+  const list = (scopeUsername ? orders.filter((o) => o.sellerUsername === scopeUsername) : orders).slice().reverse();
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 16 }}>Pedidos</div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+        {list.length === 0 && <div style={{ padding: 20, fontSize: 13, color: TOKENS.graphite }}>Nenhum pedido encontrado.</div>}
+        {list.map((o) => {
+          const total = o.items.reduce((a, it) => a + it.qty * it.price, 0);
+          const qtdItens = o.items.reduce((a, it) => a + it.qty, 0);
+          const lastLog = o.statusLog && o.statusLog[o.statusLog.length - 1];
+          const colors = ORDER_STATUS_COLORS[o.status] || { bg: TOKENS.ivorySoft, fg: TOKENS.graphite };
+          return (
+            <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.6fr 1fr 1.6fr", gap: 12, alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+              <div>
+                <div style={{ fontSize: 13.5, color: TOKENS.ink }}>{o.clientName}</div>
+                <div style={{ fontSize: 11, color: TOKENS.graphite }}>por {o.sellerName}</div>
+              </div>
+              <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>{new Date(o.date).toLocaleDateString("pt-BR")}</div>
+              <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>{qtdItens} peça(s)</div>
+              <div style={{ fontSize: 13, color: TOKENS.ink }}>R$ {total.toFixed(2).replace(".", ",")}</div>
+              <div>
+                {readOnly ? (
+                  <span style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 3, background: colors.bg, color: colors.fg }}>{o.status}</span>
+                ) : (
+                  <select value={o.status} onChange={(e) => updateStatus(o.id, e.target.value)} style={{ fontSize: 12, padding: "5px 6px", borderRadius: 3, border: `1px solid ${TOKENS.line}` }}>
+                    {ORDER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                )}
+                {lastLog && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 4 }}>Alterado por {lastLog.by} · {new Date(lastLog.when).toLocaleString("pt-BR")}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
