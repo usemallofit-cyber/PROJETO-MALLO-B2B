@@ -1227,14 +1227,14 @@ function VariantEditor({ v, onChange, onRemove, onAddImages, onRemoveImage, onSe
       <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 1, color: TOKENS.graphite, marginBottom: 6 }}>Fotos desta cor (até 4 · a 1ª é a foto principal)</div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         {v.images.map((img, i) => (
-          <div key={i} style={{ position: "relative", width: 66, aspectRatio: "3/8" }}>
+          <div key={i} style={{ position: "relative", width: 66, height: 84 }}>
             <img src={img} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 3, border: i === 0 ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}` }} />
             {i === 0 && <span style={{ position: "absolute", bottom: 2, left: 2, background: TOKENS.wine, color: "#fff", fontSize: 8, padding: "1px 4px", borderRadius: 2 }}>Principal</span>}
             <button onClick={() => onRemoveImage(i)} style={{ position: "absolute", top: -6, right: -6, background: TOKENS.wine, color: "#fff", border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 11 }}>×</button>
           </div>
         ))}
         {v.images.length < 4 && (
-         <button onClick={() => fileRef.current.click()} style={{ width: 66, aspectRatio: "3/8", border: `1px dashed ${TOKENS.line}`, borderRadius: 3, background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", color: TOKENS.graphite, gap: 4 }}>
+        <button onClick={() => fileRef.current.click()} style={{ width: 66, height: 84, border: `1px dashed ${TOKENS.line}`, borderRadius: 3, background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", color: TOKENS.graphite, gap: 4 }}>
             <Upload size={14} /><span style={{ fontSize: 9.5 }}>Subir</span>
           </button>
         )}
