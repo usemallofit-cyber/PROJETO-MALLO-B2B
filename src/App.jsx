@@ -290,7 +290,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
-      {screen === "admin" && isStaff ? (
+      {screen === "admin" && session.role === "admincentral" ? (
         <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} />
@@ -1126,7 +1126,7 @@ function ProdutosAdmin({ products, setProducts }) {
           <button onClick={startNew} style={btnPrimary}><Plus size={15} /> Novo modelo</button>
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px,1fr))", gap: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 16 }}>
         {list.map((p) => (
           <div key={p.id} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
             <div style={{ aspectRatio: "3/8", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
