@@ -316,10 +316,18 @@ export default function App() {
 
 /* ---------------- LOGIN ---------------- */
 function LoginScreen({ users, onLogin }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState(() => localStorage.getItem("mallo_saved_user") || "");
+  const [password, setPassword] = useState(() => localStorage.getItem("mallo_saved_pass") || "");
   const [error, setError] = useState("");
   const [showPass, setShowPass] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  function saveLogin() {
+    localStorage.setItem("mallo_saved_user", username);
+    localStorage.setItem("mallo_saved_pass", password);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }
 
   function submit() {
     const key = username.trim().toLowerCase();
@@ -351,7 +359,10 @@ function LoginScreen({ users, onLogin }) {
             <button onClick={() => setShowPass((s) => !s)} style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.graphite }}><Eye size={15} /></button>
           </div>
           {error && <div style={{ color: "#D98080", fontSize: 12.5, marginTop: 8 }}>{error}</div>}
-          <button onClick={submit} style={{ width: "100%", marginTop: 18, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: "pointer" }}>Entrar</button>
+          <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+            <button onClick={submit} style={{ flex: 1, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: "pointer" }}>Entrar</button>
+            <button onClick={saveLogin} title="Salvar este login neste navegador" style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
+          </div>
         </div>
         <div style={{ textAlign: "center", color: TOKENS.graphite, fontSize: 11.5, marginTop: 16 }}>Acesso central, administrativo, de representantes e de clientes atacado — solicite ao seu representante.</div>
       </div>
@@ -468,7 +479,7 @@ function ProductCard({ p, showPrice, addToCart }) {
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div style={{ position: "relative", aspectRatio: "3/5", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ position: "relative", aspectRatio: "3/4", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {imgs[imgIdx] ? <img src={imgs[imgIdx]} alt={p.model} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={36} color={TOKENS.line} />}
         {imgs.length > 1 && (
           <>
@@ -1129,7 +1140,7 @@ function ProdutosAdmin({ products, setProducts }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 16 }}>
         {list.map((p) => (
           <div key={p.id} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
-            <div style={{ aspectRatio: "3/5", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ aspectRatio: "3/4", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {p.variants?.[0]?.images?.[0] ? <img src={p.variants[0].images[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={28} color={TOKENS.line} />}
             </div>
             <div style={{ padding: 12 }}>
