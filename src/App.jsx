@@ -368,14 +368,17 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
       <div style={{ fontFamily: "Georgia, serif", fontSize: 19, letterSpacing: 0.5 }}>Catálogo B2B</div>
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         {isStaff && (
-          <div style={{ display: "flex", background: TOKENS.inkSoft, borderRadius: 3, padding: 3 }}>
-            <button onClick={() => setScreen("catalog")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "catalog" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Vitrine</button>
-            <button onClick={() => setScreen("admin")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "admin" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Painel ADM</button>
-            {session.role === "admincentral" && (
-              <button onClick={() => setScreen("central")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "central" ? TOKENS.wine : "transparent", color: TOKENS.ivory, display: "flex", alignItems: "center", gap: 5 }}><Crown size={12} /> Painel Central</button>
-            )}
-          </div>
-        )}
+          {isStaff && (
+  <div style={{ display: "flex", background: TOKENS.inkSoft, borderRadius: 3, padding: 3 }}>
+    <button onClick={() => setScreen("catalog")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "catalog" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Vitrine</button>
+    {session.role === "admincentral" && (
+      <button onClick={() => setScreen("admin")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "admin" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Painel ADM</button>
+    )}
+    {session.role === "admincentral" && (
+      <button onClick={() => setScreen("central")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "central" ? TOKENS.wine : "transparent", color: TOKENS.ivory, display: "flex", alignItems: "center", gap: 5 }}><Crown size={12} /> Painel Central</button>
+    )}
+  </div>
+)}
         {session.role === "representante" && (
           <div style={{ display: "flex", background: TOKENS.inkSoft, borderRadius: 3, padding: 3 }}>
             <button onClick={() => setScreen("catalog")} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 2, border: "none", cursor: "pointer", background: screen === "catalog" ? TOKENS.wine : "transparent", color: TOKENS.ivory }}>Vitrine</button>
@@ -1123,7 +1126,7 @@ function ProdutosAdmin({ products, setProducts }) {
           <button onClick={startNew} style={btnPrimary}><Plus size={15} /> Novo modelo</button>
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px,1fr))", gap: 22 }}>
         {list.map((p) => (
           <div key={p.id} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
             <div style={{ aspectRatio: "3/8", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
