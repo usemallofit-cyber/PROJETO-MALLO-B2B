@@ -239,20 +239,22 @@ export default function App() {
     if (session) await storageSet(`cart_${session.username}`, next, false);
   }, [session]);
 
-  function addToCart(product, variant, size, qty) {
-    const cartItemId = `${product.id}__${variant.id}__${size}`;
-    const maxQty = variant.stock[size] || 0;
-    const existing = cart.find((c) => c.cartItemId === cartItemId);
-    let next;
-    if (existing) {
-      next = cart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: Math.min(maxQty, c.qty + qty) } : c);
-    } else {
-      next = [...cart, {
-        cartItemId, productId: product.id, model: product.model, category: product.category, price: product.price,
-        color: variant.color, hex: variant.hex, size, qty: Math.min(maxQty, qty),
-        image: variant.images[0] || null,
-      }];
-    }
+  function addToCart(product, variant, items) {
+    let next = cart;
+    items.forEach(({ size, qty }) => {
+      const cartItemId = `${product.id}__${variant.id}__${size}`;
+      const maxQty = variant.stock[size] || 0;
+      const existing = next.find((c) => c.cartItemId === cartItemId);
+      if (existing) {
+        next = next.map((c) => c.cartItemId === cartItemId ? { ...c, qty: Math.min(maxQty, c.qty + qty) } : c);
+      } else {
+        next = [...next, {
+          cartItemId, productId: product.id, model: product.model, category: product.category, price: product.price,
+          color: variant.color, hex: variant.hex, size, qty: Math.min(maxQty, qty),
+          image: variant.images[0] || null,
+        }];
+      }
+    });
     persistCart(next);
     setCartOpen(true);
   }
@@ -468,14 +470,15 @@ function ProductCard({ p, showPrice, addToCart }) {
   const variants = p.variants && p.variants.length ? p.variants : [{ id: "none", color: "", hex: TOKENS.line, images: [], stock: {} }];
   const [vIdx, setVIdx] = useState(0);
   const [imgIdx, setImgIdx] = useState(0);
-  const [size, setSize] = useState(null);
-  const [qty, setQty] = useState(1);
+  const [sizeQty, setSizeQty] = useState({});
   const variant = variants[vIdx];
   const imgs = variant.images && variant.images.length ? variant.images : [null];
 
-  useEffect(() => { setImgIdx(0); setSize(null); setQty(1); }, [vIdx]);
+  useEffect(() => { setImgIdx(0); setSizeQty({}); }, [vIdx]);
 
-  const maxQty = size ? (variant.stock[size] || 0) : 0;
+  function bump(s, stockQty) { setSizeQty((q) => ({ ...q, [s]: Math.min(stockQty, (q[s] || 0) + 1) })); }
+  function setQtyFor(s, val, stockQty) { setSizeQty((q) => ({ ...q, [s]: Math.max(0, Math.min(stockQty, val)) })); }
+  const totalQty = Object.values(sizeQty).reduce((a, b) => a + b, 0);
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -491,6 +494,7 @@ function ProductCard({ p, showPrice, addToCart }) {
       <div style={{ padding: "14px 16px 16px" }}>
         {p.category && <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: TOKENS.wine, marginBottom: 3 }}>{p.category}</div>}
         <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink }}>{p.model}</div>
+        {p.sku && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 1 }}>SKU: {p.sku}</div>}
         <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginTop: 4, lineHeight: 1.4, minHeight: 32 }}>{p.description}</div>
 
         {variant.color && (
@@ -512,34 +516,38 @@ function ProductCard({ p, showPrice, addToCart }) {
           {SIZES.map((s) => {
             const stockQty = variant.stock ? (variant.stock[s] || 0) : 0;
             const out = !stockQty;
-            const selected = size === s;
+            const current = sizeQty[s] || 0;
             return (
-              <button key={s} disabled={out} onClick={() => setSize(s)} style={{
-                flex: 1, textAlign: "center", padding: "5px 0", borderRadius: 3, cursor: out ? "default" : "pointer",
-                background: out ? "#F1EDE4" : selected ? TOKENS.wine : TOKENS.ivorySoft,
-                color: out ? "#B8AF9C" : selected ? "#fff" : TOKENS.ink,
-                fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none", border: "none",
-              }}>{s}</button>
+              <div key={s} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <button disabled={out} onClick={() => bump(s, stockQty)} style={{
+                  width: "100%", textAlign: "center", padding: "5px 0", borderRadius: 3, cursor: out ? "default" : "pointer",
+                  background: out ? "#F1EDE4" : current > 0 ? TOKENS.wine : TOKENS.ivorySoft,
+                  color: out ? "#B8AF9C" : current > 0 ? "#fff" : TOKENS.ink,
+                  fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none", border: "none",
+                }}>{s}</button>
+                <input type="text" inputMode="numeric" disabled={out} value={current}
+                  onChange={(e) => setQtyFor(s, parseInt(e.target.value) || 0, stockQty)}
+                  style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : "#fff", color: out ? "#B8AF9C" : TOKENS.ink }} />
+              </div>
             );
           })}
         </div>
 
         {showPrice && <div style={{ marginTop: 12, fontFamily: "Georgia, serif", fontSize: 19, color: TOKENS.wine }}>R$ {p.price}</div>}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", border: `1px solid ${TOKENS.line}`, borderRadius: 3 }}>
-            <button onClick={() => setQty((q) => Math.max(1, q - 1))} style={qtyBtnStyle}><Minus size={12} /></button>
-            <span style={{ width: 26, textAlign: "center", fontSize: 12.5 }}>{qty}</span>
-            <button onClick={() => setQty((q) => Math.min(maxQty || 1, q + 1))} style={qtyBtnStyle}><Plus size={12} /></button>
-          </div>
+        <div style={{ marginTop: 12 }}>
           <button
-            disabled={!size || !p.variants?.length}
-            onClick={() => { addToCart(p, variant, size, qty); }}
-            style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: size ? TOKENS.wine : TOKENS.line, color: "#fff", border: "none", borderRadius: 3, padding: "9px 0", fontSize: 12.5, cursor: size ? "pointer" : "default" }}>
-            <ShoppingCart size={13} /> Adicionar
+            disabled={!totalQty || !p.variants?.length}
+            onClick={() => {
+              const items = SIZES.filter((s) => (sizeQty[s] || 0) > 0).map((s) => ({ size: s, qty: sizeQty[s] }));
+              addToCart(p, variant, items);
+              setSizeQty({});
+            }}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: totalQty ? TOKENS.wine : TOKENS.line, color: "#fff", border: "none", borderRadius: 3, padding: "9px 0", fontSize: 12.5, cursor: totalQty ? "pointer" : "default" }}>
+            <ShoppingCart size={13} /> Adicionar ({totalQty})
           </button>
         </div>
-        {!size && p.variants?.length > 0 && <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 6 }}>Selecione um tamanho disponível</div>}
+        {!totalQty && p.variants?.length > 0 && <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 6 }}>Clique em um tamanho para somar quantidade</div>}
       </div>
     </div>
   );
@@ -1114,7 +1122,7 @@ function ProdutosAdmin({ products, setProducts }) {
   const [showForm, setShowForm] = useState(false);
   const [filterCat, setFilterCat] = useState("Todas");
 
-  function startNew() { setEditing({ id: uid("p_"), model: "", category: CATEGORIES[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: CATEGORIES[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
   function startEdit(p) { setEditing({ ...p, variants: p.variants.map((v) => ({ ...v, stock: { ...v.stock } })) }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este produto do catálogo?")) setProducts(products.filter((p) => p.id !== id)); }
   function save(p) {
@@ -1192,6 +1200,9 @@ function ProductForm({ initial, onCancel, onSave }) {
 
           <FieldLabel>Nome do modelo</FieldLabel>
           <input value={p.model} onChange={(e) => setP({ ...p, model: e.target.value })} style={inputStyle} placeholder="Ex: Vestido Aurora" />
+
+          <FieldLabel>SKU</FieldLabel>
+          <input value={p.sku || ""} onChange={(e) => setP({ ...p, sku: e.target.value })} style={inputStyle} placeholder="Ex: MAL-VEST-AUR-01" />
 
           <FieldLabel>Descrição</FieldLabel>
           <textarea value={p.description} onChange={(e) => setP({ ...p, description: e.target.value })} style={{ ...inputStyle, minHeight: 58, resize: "vertical" }} placeholder="Tecido, caimento, detalhes..." />
