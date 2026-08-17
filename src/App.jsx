@@ -814,6 +814,8 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 
 /* ---------------- ADMIN (funcionário) ---------------- */
 function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus }) {
+  const [tab, setTab] = useState("produtos");
+  const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
