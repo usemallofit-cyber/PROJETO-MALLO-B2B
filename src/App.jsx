@@ -294,14 +294,36 @@ export default function App() {
   const persistClients = useCallback(async (next) => { setClients(next); await storageSet(STORE_KEYS.clients, next, true); }, []);
   const persistOrders = useCallback(async (next) => { setOrders(next); await storageSet(STORE_KEYS.orders, next, true); }, []);
 
-  function updateOrderStatus(orderId, newStatus) {
-    const next = orders.map((o) => o.id === orderId
-      ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
-      : o);
-    persistOrders(next);
+  // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
+  // (cancelamento), sign=-1 abate de novo (pedido reativado a partir de
+  // "Pedido cancelado"). Pedidos criados antes desta atualização não têm
+  // productId/variantId guardado — nesse caso, tenta casar por modelo + cor;
+  // se não achar correspondência, esse item é ignorado silenciosamente.
+  function adjustStockForOrderItems(items, sign) {
+    let nextProducts = products;
+    items.forEach((it) => {
+      let productId = it.productId, variantId = it.variantId;
+      if (!productId || !variantId) {
+        const prod = nextProducts.find((p) => p.model === it.model);
+        const variant = prod?.variants.find((v) => v.color === it.color);
+        if (!prod || !variant) return;
+        productId = prod.id; variantId = variant.id;
+      }
+      nextProducts = nextProducts.map((p) => p.id !== productId ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== variantId ? v : { ...v, stock: { ...v.stock, [it.size]: Math.max(0, (v.stock?.[it.size] || 0) + sign * it.qty) } }),
+      });
+    });
+    if (nextProducts !== products) persistProducts(nextProducts);
   }
 
   function updateOrderStatus(orderId, newStatus) {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) return;
+    const wasCancelled = order.status === "Pedido cancelado";
+    const willBeCancelled = newStatus === "Pedido cancelado";
+    if (willBeCancelled && !wasCancelled) adjustStockForOrderItems(order.items, +1);
+    else if (wasCancelled && !willBeCancelled) adjustStockForOrderItems(order.items, -1);
     const next = orders.map((o) => o.id === orderId
       ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
       : o);
@@ -322,34 +344,94 @@ export default function App() {
     if (session) await storageSet(`cart_${session.username}`, next, false);
   }, [session]);
 
+  // Modelo de estoque: assim que um item entra no carrinho, a quantidade é
+  // abatida de verdade do estoque do produto (fica "reservada" para este
+  // pedido). Se o item for removido do carrinho, a quantidade voltar for
+  // reduzida, ou o carrinho for esvaziado sem finalizar, o estoque retorna.
+  // Ao finalizar o pedido, o abate permanece (virou uma venda de verdade).
+  // Observação: como o catálogo inteiro é salvo como um único registro no
+  // Supabase, dois usuários mexendo no estoque ao mesmo tempo (ex.: um
+  // adicionando ao carrinho enquanto um admin edita o estoque manualmente)
+  // podem sobrescrever a alteração um do outro — mesma limitação que já
+  // existia para qualquer edição simultânea de produtos neste app.
   function addToCart(product, variant, items) {
-    let next = cart;
+    let nextCart = cart;
+    let nextProducts = products;
     items.forEach(({ size, qty }) => {
       const cartItemId = `${product.id}__${variant.id}__${size}`;
-      const maxQty = variant.stock[size] || 0;
-      const existing = next.find((c) => c.cartItemId === cartItemId);
+      const liveProduct = nextProducts.find((p) => p.id === product.id);
+      const liveVariant = liveProduct?.variants.find((v) => v.id === variant.id);
+      const available = liveVariant?.stock?.[size] || 0;
+      const addQty = Math.min(available, qty);
+      if (addQty <= 0) return;
+
+      const existing = nextCart.find((c) => c.cartItemId === cartItemId);
       if (existing) {
-        next = next.map((c) => c.cartItemId === cartItemId ? { ...c, qty: Math.min(maxQty, c.qty + qty) } : c);
+        nextCart = nextCart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: c.qty + addQty } : c);
       } else {
-        next = [...next, {
-          cartItemId, productId: product.id, model: product.model, category: product.category, price: product.price,
-          color: variant.color, hex: variant.hex, size, qty: Math.min(maxQty, qty),
+        nextCart = [...nextCart, {
+          cartItemId, productId: product.id, variantId: variant.id, model: product.model, category: product.category, price: product.price,
+          color: variant.color, hex: variant.hex, size, qty: addQty,
           image: variant.images[0] || null,
         }];
       }
+      nextProducts = nextProducts.map((p) => p.id !== product.id ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== variant.id ? v : { ...v, stock: { ...v.stock, [size]: available - addQty } }),
+      });
     });
-    persistCart(next);
+    if (nextProducts !== products) persistProducts(nextProducts);
+    persistCart(nextCart);
     setCartOpen(true);
   }
-  function updateCartQty(cartItemId, qty) { persistCart(cart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: Math.max(1, qty) } : c)); }
-  function removeCartItem(cartItemId) { persistCart(cart.filter((c) => c.cartItemId !== cartItemId)); }
-  function clearCart() { persistCart([]); setSelectedClient(null); }
+  function updateCartQty(cartItemId, qty) {
+    const item = cart.find((c) => c.cartItemId === cartItemId);
+    if (!item) return;
+    const liveProduct = products.find((p) => p.id === item.productId);
+    const liveVariant = liveProduct?.variants.find((v) => v.id === item.variantId);
+    const availableNow = liveVariant?.stock?.[item.size] || 0;
+    const newQty = Math.max(1, Math.min(availableNow + item.qty, qty));
+    const delta = newQty - item.qty;
+    if (delta !== 0) {
+      const nextProducts = products.map((p) => p.id !== item.productId ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: Math.max(0, (v.stock?.[item.size] || 0) - delta) } }),
+      });
+      persistProducts(nextProducts);
+    }
+    persistCart(cart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: newQty } : c));
+  }
+  function removeCartItem(cartItemId) {
+    const item = cart.find((c) => c.cartItemId === cartItemId);
+    if (item) {
+      const nextProducts = products.map((p) => p.id !== item.productId ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + item.qty } }),
+      });
+      persistProducts(nextProducts);
+    }
+    persistCart(cart.filter((c) => c.cartItemId !== cartItemId));
+  }
+  function clearCart() {
+    if (cart.length) {
+      let nextProducts = products;
+      cart.forEach((item) => {
+        nextProducts = nextProducts.map((p) => p.id !== item.productId ? p : {
+          ...p,
+          variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + item.qty } }),
+        });
+      });
+      persistProducts(nextProducts);
+    }
+    persistCart([]);
+    setSelectedClient(null);
+  }
 
   function finalizeOrder() {
     if (!cart.length || !session) return;
     const items = cart.map((c) => {
       const prod = products.find((p) => p.id === c.productId);
-      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null };
+      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId };
     });
  const record = {
       id: uid("ord_"), date: new Date().toISOString(),
@@ -1226,13 +1308,14 @@ function RepClientsPanel({ clients, setClients, session }) {
   );
 }
 
-const ORDER_STATUSES = ["Enviado à fábrica", "Crédito liberado", "Crédito bloqueado", "Pedido em preparação", "Pedido enviado"];
+const ORDER_STATUSES = ["Enviado à fábrica", "Crédito liberado", "Crédito bloqueado", "Pedido em preparação", "Pedido enviado", "Pedido cancelado"];
 const ORDER_STATUS_COLORS = {
   "Enviado à fábrica": { bg: "#E6F1FB", fg: "#0C447C" },
   "Crédito liberado": { bg: "#EAF3DE", fg: "#27500A" },
   "Crédito bloqueado": { bg: "#FCEBEB", fg: "#791F1F" },
   "Pedido em preparação": { bg: "#FAEEDA", fg: "#633806" },
   "Pedido enviado": { bg: "#EEEDFE", fg: "#3C3489" },
+  "Pedido cancelado": { bg: "#F3DCDC", fg: "#6E2C2C" },
 };
 
 function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
