@@ -81,6 +81,72 @@ async function buildOrderImage(cart, session, showPrice, client) {
   return canvas.toDataURL("image/png");
 }
 
+// Carrega a biblioteca jsPDF sob demanda, direto de um CDN — não precisa de
+// npm install nem de mexer no index.html. Só busca o script uma vez.
+let _jsPdfLoading = null;
+function loadJsPDF() {
+  if (window.jspdf?.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+  if (_jsPdfLoading) return _jsPdfLoading;
+  _jsPdfLoading = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    script.onload = () => resolve(window.jspdf.jsPDF);
+    script.onerror = () => reject(new Error("Falha ao carregar jsPDF"));
+    document.head.appendChild(script);
+  });
+  return _jsPdfLoading;
+}
+
+// Gera um PDF real (sempre 1 página, a menos que o pedido seja gigante) a partir
+// de uma lista de itens de pedido. Usado tanto no carrinho do cliente quanto na
+// aba Pedidos do painel — troca window.print() (que duplicava página) por um PDF
+// de verdade, que também pode ser anexado no compartilhamento do WhatsApp.
+async function buildOrderPdfBlob(items, session, showPrice, client) {
+  const jsPDF = await loadJsPDF();
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+  let y = 46;
+
+  doc.setFont("times", "bold"); doc.setFontSize(17); doc.setTextColor(23, 22, 26);
+  doc.text(`Pedido - ${session?.name || session?.username || ""}`, marginX, y);
+  y += 18;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(90, 86, 76);
+  doc.text(new Date().toLocaleDateString("pt-BR"), marginX, y);
+  y += 14;
+  if (client) {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(140, 58, 58);
+    doc.text(`Cliente: ${client.buyerName}${client.cnpj ? "  CNPJ: " + client.cnpj : ""}`, marginX, y);
+    y += 16;
+  }
+  doc.setDrawColor(220, 210, 190);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 22;
+
+  for (const c of items) {
+    if (y > 760) { doc.addPage(); y = 46; }
+    if (c.image) {
+      try { doc.addImage(c.image, "JPEG", marginX, y, 46, 58); } catch (e) { /* segue sem a foto */ }
+    }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(23, 22, 26);
+    doc.text(`${c.qty}x ${c.model}`, marginX + 58, y + 16);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(90, 86, 76);
+    doc.text(`Cor: ${c.color}  ·  Tam: ${c.size}`, marginX + 58, y + 32);
+    if (showPrice) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(140, 58, 58);
+      doc.text(`R$ ${formatBRL(parseBRL(c.price) * c.qty)}`, marginX + 58, y + 50);
+    }
+    y += 68;
+  }
+  if (showPrice) {
+    const total = items.reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
+    if (y > 760) { doc.addPage(); y = 46; }
+    doc.setFont("times", "bold"); doc.setFontSize(15); doc.setTextColor(23, 22, 26);
+    doc.text(`Total: R$ ${formatBRL(total)}`, marginX, y + 20);
+  }
+  return doc.output("blob");
+}
+
 // Camada de armazenamento — agora conversando com o Supabase (banco de dados na nuvem)
 // em vez da "gaveta" interna do Claude. Guardamos cada "chave" do app (produtos,
 // usuários, pedidos, etc.) como uma linha na tabela app_data, com o valor em JSONB.
@@ -280,7 +346,7 @@ export default function App() {
     if (!cart.length || !session) return;
     const items = cart.map((c) => {
       const prod = products.find((p) => p.id === c.productId);
-      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0 };
+      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null };
     });
  const record = {
       id: uid("ord_"), date: new Date().toISOString(),
@@ -291,6 +357,10 @@ export default function App() {
       statusLog: [{ status: "Enviado à fábrica", by: session.name || session.username, when: new Date().toISOString() }],
     };
     persistOrders([...orders, record]);
+    // Encerra a ação de estar no carrinho: esvazia o carrinho e o cliente
+    // selecionado, já que o pedido acabou de ser liberado para a aba Pedidos.
+    persistCart([]);
+    setSelectedClient(null);
   }
 
   if (!booted) {
@@ -622,10 +692,18 @@ function buildOrderText(cart, session, showPrice, client) {
 function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, clearCart, settings, session, clients, needsClientSelect, selectedClient, setSelectedClient, onFinalizeOrder }) {
   const [step, setStep] = useState("list");
   const [downloading, setDownloading] = useState(false);
+  const [sendingWhats, setSendingWhats] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
   const [sendError, setSendError] = useState("");
+  // Guarda uma "foto" do pedido no instante de finalizar: como o carrinho é
+  // esvaziado assim que o pedido é liberado para a aba Pedidos, a tela de
+  // finalização (PDF/e-mail/WhatsApp) precisa continuar mostrando os itens
+  // que acabaram de ser enviados, não o carrinho (já vazio) em tempo real.
+  const [finalizedSnapshot, setFinalizedSnapshot] = useState(null);
+  const displayCart = step === "finalize" && finalizedSnapshot ? finalizedSnapshot.items : cart;
+  const displayClient = step === "finalize" && finalizedSnapshot ? finalizedSnapshot.client : selectedClient;
   const total = cart.reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
-  const orderText = useMemo(() => buildOrderText(cart, session, showPrice, selectedClient), [cart, session, showPrice, selectedClient]);
+  const orderText = useMemo(() => buildOrderText(displayCart, session, showPrice, displayClient), [displayCart, session, showPrice, displayClient]);
   const orderEmail = (settings.orderEmail || "").trim();
   const mailHref = `mailto:${orderEmail}?subject=${encodeURIComponent(`Novo pedido - ${session.name || session.username}`)}&body=${encodeURIComponent(orderText)}`;
   const waDigits = (settings.orderWhatsapp || "").replace(/\D/g, "");
@@ -633,17 +711,32 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
   const hasEmail = orderEmail.length > 3 && orderEmail.includes("@");
   const hasWhats = waDigits.length >= 10;
   const clientReady = !needsClientSelect || !!selectedClient;
+  const pdfFileName = `pedido-${(session.name || session.username).replace(/\s+/g, "-").toLowerCase()}.pdf`;
 
   async function downloadImage() {
     setDownloading(true);
     try {
-      const url = await buildOrderImage(cart, session, showPrice, selectedClient);
+      const url = await buildOrderImage(displayCart, session, showPrice, displayClient);
       const a = document.createElement("a");
       a.href = url; a.download = `pedido-${(session.name || session.username).replace(/\s+/g, "-").toLowerCase()}.png`;
       document.body.appendChild(a); a.click(); a.remove();
     } finally { setDownloading(false); }
   }
-  function downloadPdf() { window.print(); }
+
+  async function downloadPdf() {
+    setDownloading(true);
+    setSendError("");
+    try {
+      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = pdfFileName;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setSendError("Não foi possível gerar o PDF agora. Tente novamente em alguns segundos.");
+    } finally { setDownloading(false); }
+  }
 
   function copyOrderText() {
     navigator.clipboard?.writeText(orderText);
@@ -660,15 +753,35 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
       setSendError(`Não foi possível abrir seu aplicativo de e-mail automaticamente. Use "Copiar texto do pedido" e cole em uma nova mensagem para ${orderEmail}.`);
     }
   }
-  function sendWhatsapp() {
+
+  // Tenta anexar o PDF de verdade via compartilhamento nativo do aparelho
+  // (funciona em celular — abre a mesma tela de "compartilhar" com o WhatsApp
+  // como opção, já com o PDF anexado). Não existe forma de anexar arquivo via
+  // link wa.me — é uma limitação da própria plataforma, então em computador
+  // (ou quando o compartilhamento nativo não está disponível) cai para o link
+  // de texto, como já acontecia antes.
+  async function sendWhatsapp() {
     setSendError("");
     if (!hasWhats) return;
+    setSendingWhats(true);
+    try {
+      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient);
+      const file = new File([blob], pdfFileName, { type: "application/pdf" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Pedido", text: orderText });
+        setSendingWhats(false);
+        return;
+      }
+    } catch (e) {
+      if (e?.name === "AbortError") { setSendingWhats(false); return; } // usuário cancelou o compartilhamento
+    }
     try {
       const win = window.open(waHref, "_blank", "noopener,noreferrer");
       if (!win) setSendError('Não foi possível abrir o WhatsApp automaticamente. Use "Copiar texto do pedido" e cole numa conversa do WhatsApp.');
     } catch (e) {
       setSendError('Não foi possível abrir o WhatsApp automaticamente. Use "Copiar texto do pedido" e cole numa conversa do WhatsApp.');
     }
+    setSendingWhats(false);
   }
 
   const clientPicker = needsClientSelect && (
@@ -722,7 +835,7 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
             {cart.length > 0 && (
               <div style={{ padding: 16, borderTop: `1px solid ${TOKENS.line}`, background: "#fff" }}>
                 {showPrice && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 15 }}><span>Total</span><b style={{ color: TOKENS.wine, fontFamily: "Georgia, serif", fontSize: 19 }}>R$ {formatBRL(total)}</b></div>}
-                <button onClick={() => { onFinalizeOrder(); setStep("finalize"); }} disabled={!clientReady} title={!clientReady ? "Selecione um cliente para este pedido" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: clientReady ? 1 : 0.5, cursor: clientReady ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
+                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient }); onFinalizeOrder(); setStep("finalize"); }} disabled={!clientReady} title={!clientReady ? "Selecione um cliente para este pedido" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: clientReady ? 1 : 0.5, cursor: clientReady ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
                 {!clientReady && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 6, textAlign: "center" }}>Selecione o cliente acima para continuar.</div>}
                 <button onClick={() => { if (confirm("Esvaziar o carrinho?")) clearCart(); }} style={{ ...btnGhostSmall, width: "100%", justifyContent: "center", marginTop: 8 }}>Esvaziar carrinho</button>
               </div>
@@ -732,14 +845,15 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
 
         {step === "finalize" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            {selectedClient && (
+            <div style={{ fontSize: 12, color: TOKENS.ok, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}><Check size={14} /> Pedido enviado para a aba Pedidos.</div>
+            {displayClient && (
               <div style={{ background: TOKENS.ivorySoft, border: `1px solid ${TOKENS.sand}`, borderRadius: 4, padding: 10, marginBottom: 14, fontSize: 12 }}>
-                <b>{selectedClient.buyerName}</b>{selectedClient.cnpj ? ` · CNPJ ${selectedClient.cnpj}` : ""}{selectedClient.phone ? ` · ${selectedClient.phone}` : ""}
+                <b>{displayClient.buyerName}</b>{displayClient.cnpj ? ` · CNPJ ${displayClient.cnpj}` : ""}{displayClient.phone ? ` · ${displayClient.phone}` : ""}
               </div>
             )}
             <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 12 }}>Fotos principais dos itens:</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-              {cart.map((c) => (
+              {displayCart.map((c) => (
                 <div key={c.cartItemId} style={{ position: "relative", width: 52, height: 66 }}>
                   <div style={{ width: "100%", height: "100%", borderRadius: 3, border: `1px solid ${TOKENS.line}`, overflow: "hidden", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {c.image ? <img src={c.image} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={14} color={TOKENS.line} />}
@@ -752,13 +866,12 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
             <textarea readOnly value={orderText} style={{ width: "100%", minHeight: 160, border: `1px solid ${TOKENS.line}`, borderRadius: 3, padding: 10, fontSize: 12, fontFamily: "monospace", background: "#fff", boxSizing: "border-box", resize: "vertical" }} />
 
             <div style={{ fontSize: 11, color: TOKENS.graphite, margin: "10px 0 14px", lineHeight: 1.5 }}>
-              E-mail e WhatsApp abrem só com o texto do pedido — não é possível embutir fotos dentro dessas mensagens. Use o PDF ou o PNG abaixo (já com a foto principal de cada peça) para anexar.
+              E-mail abre só com o texto do pedido — não é possível embutir fotos numa mensagem de e-mail simples. Use o PDF ou o PNG abaixo (já com a foto principal de cada peça) para anexar. O botão de WhatsApp já tenta anexar o PDF automaticamente pelo celular.
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <button onClick={downloadPdf} style={{ ...btnGhostSmall, flex: 1, justifyContent: "center", padding: "10px 0" }}><Printer size={14} /> Baixar em PDF</button>
+              <button onClick={downloadPdf} disabled={downloading} style={{ ...btnGhostSmall, flex: 1, justifyContent: "center", padding: "10px 0" }}><Printer size={14} /> {downloading ? "Gerando..." : "Baixar em PDF"}</button>
               <button onClick={downloadImage} disabled={downloading} style={{ ...btnGhostSmall, flex: 1, justifyContent: "center", padding: "10px 0" }}><Download size={14} /> {downloading ? "Gerando..." : "Baixar PNG"}</button>
             </div>
-            <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: -8, marginBottom: 14 }}>No PDF, escolha "Salvar como PDF" como impressora na janela que abrir.</div>
 
             {sendError && <div style={{ fontSize: 11.5, color: "#A5453F", background: "#FBEAEA", border: "1px solid #E3B3B3", borderRadius: 3, padding: 10, marginBottom: 12 }}>{sendError}</div>}
 
@@ -766,15 +879,15 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
               <button onClick={sendEmail} disabled={!hasEmail} title={!hasEmail ? "Administrador ainda não cadastrou o e-mail em Configurações" : ""} style={{ ...btnPrimary, justifyContent: "center", opacity: hasEmail ? 1 : 0.45, cursor: hasEmail ? "pointer" : "not-allowed" }}>
                 <Mail size={15} /> Enviar por e-mail{hasEmail ? ` (${orderEmail})` : ""}
               </button>
-              <button onClick={sendWhatsapp} disabled={!hasWhats} title={!hasWhats ? "Administrador ainda não cadastrou o WhatsApp em Configurações" : ""} style={{ ...btnPrimary, background: "#3E7A5C", justifyContent: "center", opacity: hasWhats ? 1 : 0.45, cursor: hasWhats ? "pointer" : "not-allowed" }}>
-                <MessageCircle size={15} /> Enviar por WhatsApp
+              <button onClick={sendWhatsapp} disabled={!hasWhats || sendingWhats} title={!hasWhats ? "Administrador ainda não cadastrou o WhatsApp em Configurações" : ""} style={{ ...btnPrimary, background: "#3E7A5C", justifyContent: "center", opacity: hasWhats ? 1 : 0.45, cursor: hasWhats ? "pointer" : "not-allowed" }}>
+                <MessageCircle size={15} /> {sendingWhats ? "Preparando PDF..." : "Enviar por WhatsApp"}
               </button>
               <button onClick={copyOrderText} style={{ ...btnGhostSmall, justifyContent: "center", padding: "10px 0", color: copiedText ? TOKENS.ok : TOKENS.graphite }}>
                 <Copy size={13} /> {copiedText ? "Texto copiado!" : "Copiar texto do pedido"}
               </button>
             </div>
             <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 10, lineHeight: 1.5 }}>
-              Se o botão de e-mail ou WhatsApp não abrir (comum quando o dispositivo não tem um app padrão configurado), use "Copiar texto do pedido" e cole manualmente numa nova mensagem.
+              Em computador, o WhatsApp abre só com o texto (o navegador não permite anexar arquivo automaticamente nesse caso) — use "Baixar em PDF" e anexe manualmente. Se o botão de e-mail não abrir (comum quando o dispositivo não tem um app padrão configurado), use "Copiar texto do pedido" e cole manualmente numa nova mensagem.
             </div>
             {(!hasEmail && !hasWhats) && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 10 }}>O administrador ainda não cadastrou e-mail/WhatsApp de recebimento em Configurações.</div>}
             <button onClick={() => setStep("list")} style={{ ...btnGhostSmall, marginTop: 16 }}><ChevronLeft size={13} /> Voltar ao carrinho</button>
@@ -1121,6 +1234,21 @@ const ORDER_STATUS_COLORS = {
 
 function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
   const list = (scopeUsername ? orders.filter((o) => o.sellerUsername === scopeUsername) : orders).slice().reverse();
+  const [downloadingId, setDownloadingId] = useState("");
+
+  async function downloadOrderPdf(o) {
+    setDownloadingId(o.id);
+    try {
+      const blob = await buildOrderPdfBlob(o.items, { name: o.sellerName, username: o.sellerUsername }, true, { buyerName: o.clientName });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `pedido-${o.clientName.replace(/\s+/g, "-").toLowerCase()}-${o.id}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Não foi possível gerar o PDF agora. Tente novamente em alguns segundos.");
+    } finally { setDownloadingId(""); }
+  }
 
   return (
     <div>
@@ -1133,7 +1261,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
           const lastLog = o.statusLog && o.statusLog[o.statusLog.length - 1];
           const colors = ORDER_STATUS_COLORS[o.status] || { bg: TOKENS.ivorySoft, fg: TOKENS.graphite };
           return (
-            <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.6fr 1fr 1.6fr", gap: 12, alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+            <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.6fr 1fr 1.6fr auto", gap: 12, alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
               <div>
                 <div style={{ fontSize: 13.5, color: TOKENS.ink }}>{o.clientName}</div>
                 <div style={{ fontSize: 11, color: TOKENS.graphite }}>por {o.sellerName}</div>
@@ -1151,6 +1279,9 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
                 )}
                 {lastLog && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 4 }}>Alterado por {lastLog.by} · {new Date(lastLog.when).toLocaleString("pt-BR")}</div>}
               </div>
+              <button onClick={() => downloadOrderPdf(o)} disabled={downloadingId === o.id} style={{ ...btnGhostSmall, whiteSpace: "nowrap" }}>
+                <Printer size={13} /> {downloadingId === o.id ? "Gerando..." : "Baixar PDF"}
+              </button>
             </div>
           );
         })}
