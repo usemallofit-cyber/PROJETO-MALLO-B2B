@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -20,6 +20,7 @@ const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set"
 const STORE_KEYS = {
   users: "catalog_users_v5", products: "catalog_products_v5", banners: "catalog_banners_v5",
   settings: "catalog_settings_v5", clients: "catalog_clients_v5", orders: "catalog_orders_v1",
+  stockItems: "catalog_stock_items_v1",
 };
 
 function uid(prefix = "") { return prefix + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
@@ -148,6 +149,32 @@ async function buildStockLabelsPdfBlob(productModel, productSku, variant, qtyByS
     doc.addImage(barcodeDataUrl, "PNG", 3, 12, 44, 11);
     doc.setFont("helvetica", "normal"); doc.setFontSize(6);
     doc.text(code, 25, 26, { align: "center" });
+  });
+  return doc.output("blob");
+}
+
+// Gera um PDF com uma etiqueta por página a partir de uma lista de peças
+// específicas (usado pela Listagem de itens — imprimir uma peça ou várias
+// selecionadas). Cada entrada precisa de { model, color, size, code }, onde
+// code já vem pronto (ex.: "MC01.7") — o código de barras usa exatamente
+// esse texto, dando rastreabilidade única por peça.
+async function buildItemLabelsPdfBlob(entries) {
+  if (!entries || !entries.length) return null;
+  const jsPDF = await loadJsPDF();
+  const JsBarcode = await loadJsBarcode();
+  const doc = new jsPDF({ unit: "mm", format: [50, 30] });
+  entries.forEach((e, i) => {
+    if (i > 0) doc.addPage([50, 30]);
+    const canvas = document.createElement("canvas");
+    JsBarcode(canvas, e.code, { format: "CODE128", width: 1.6, height: 34, displayValue: false, margin: 0 });
+    const barcodeDataUrl = canvas.toDataURL("image/png");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+    doc.text(e.model || "", 3, 5, { maxWidth: 44 });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+    doc.text(`${e.color || ""} · Tam ${e.size}`, 3, 9.5);
+    doc.addImage(barcodeDataUrl, "PNG", 3, 12, 44, 11);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6);
+    doc.text(e.code, 25, 26, { align: "center" });
   });
   return doc.output("blob");
 }
@@ -318,6 +345,7 @@ export default function App() {
   const [settings, setSettings] = useState({ orderEmail: "", orderWhatsapp: "" });
   const [clients, setClients] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [stockItems, setStockItems] = useState([]);
   const [session, setSession] = useState(null);
   const [screen, setScreen] = useState("catalog");
   const [cart, setCart] = useState([]);
@@ -326,10 +354,11 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const [u, p, b, s, cl, ord] = await Promise.all([
+      const [u, p, b, s, cl, ord, si] = await Promise.all([
         storageGet(STORE_KEYS.users, true), storageGet(STORE_KEYS.products, true),
         storageGet(STORE_KEYS.banners, true), storageGet(STORE_KEYS.settings, true),
         storageGet(STORE_KEYS.clients, true), storageGet(STORE_KEYS.orders, true),
+        storageGet(STORE_KEYS.stockItems, true),
       ]);
       const finalUsers = u || SEED_USERS;
       const finalProducts = p || SEED_PRODUCTS;
@@ -337,7 +366,7 @@ export default function App() {
       if (!p) await storageSet(STORE_KEYS.products, finalProducts, true);
       setUsers(finalUsers); setProducts(finalProducts); setBanners(b || []);
       setSettings(s || { orderEmail: "", orderWhatsapp: "" });
-      setClients(cl || []); setOrders(ord || []);
+      setClients(cl || []); setOrders(ord || []); setStockItems(si || []);
       setBooted(true);
     })();
   }, []);
@@ -348,6 +377,7 @@ export default function App() {
   const persistSettings = useCallback(async (next) => { setSettings(next); await storageSet(STORE_KEYS.settings, next, true); }, []);
   const persistClients = useCallback(async (next) => { setClients(next); await storageSet(STORE_KEYS.clients, next, true); }, []);
   const persistOrders = useCallback(async (next) => { setOrders(next); await storageSet(STORE_KEYS.orders, next, true); }, []);
+  const persistStockItems = useCallback(async (next) => { setStockItems(next); await storageSet(STORE_KEYS.stockItems, next, true); }, []);
 
   // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
   // (cancelamento), sign=-1 abate de novo (pedido reativado a partir de
@@ -381,6 +411,11 @@ export default function App() {
       const confirmed = confirm(`Cancelar o pedido de "${order.clientName}"? ${qtdItens} peça(s) vão voltar para o estoque. Depois de cancelado, este pedido não poderá mais ser reativado.`);
       if (!confirmed) return;
       adjustStockForOrderItems(order.items, +1);
+      // Libera de volta ao estoque os itens individuais (numerados) que
+      // tinham sido marcados como vendidos neste pedido.
+      if (stockItems.some((si) => si.orderId === orderId)) {
+        persistStockItems(stockItems.map((si) => si.orderId === orderId ? { ...si, orderId: null } : si));
+      }
     }
     const next = orders.map((o) => o.id === orderId
       ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
@@ -515,6 +550,22 @@ export default function App() {
       statusLog: [{ status: "Enviado à fábrica", by: session.name || session.username, when: new Date().toISOString() }],
     };
     persistOrders([...orders, record]);
+
+    // Marca as peças individuais (numeradas) mais antigas disponíveis como
+    // vendidas neste pedido, para dar rastreabilidade na Listagem de itens.
+    if (stockItems.length) {
+      let nextStockItems = stockItems;
+      cart.forEach((c) => {
+        let remaining = c.qty;
+        nextStockItems = nextStockItems.map((si) => {
+          if (remaining <= 0 || si.orderId || si.productId !== c.productId || si.variantId !== c.variantId || si.size !== c.size) return si;
+          remaining--;
+          return { ...si, orderId: record.id };
+        });
+      });
+      if (nextStockItems !== stockItems) persistStockItems(nextStockItems);
+    }
+
     // Encerra a ação de estar no carrinho: esvazia o carrinho e o cliente
     // selecionado, já que o pedido acabou de ser liberado para a aba Pedidos.
     persistCart([]);
@@ -537,7 +588,7 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -1111,10 +1162,11 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems }) {
   const [tab, setTab] = useState("produtos");
   const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
+    { id: "itens", label: "Listagem de itens", icon: ListOrdered },
     { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
     { id: "login-clientes", label: "Login de Clientes", icon: Users },
@@ -1134,7 +1186,8 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
           );
         })}
       </div>
-      {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} />}
+      {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
+      {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -1550,7 +1603,7 @@ function ClientForm({ initial, onCancel, onSave }) {
   );
 }
 
-function ProdutosAdmin({ products, setProducts }) {
+function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filterCat, setFilterCat] = useState("Todas");
@@ -1562,9 +1615,41 @@ function ProdutosAdmin({ products, setProducts }) {
   function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: CATEGORIES[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
   function startEdit(p) { setEditing({ ...p, variants: p.variants.map((v) => ({ ...v, stock: { ...v.stock } })) }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este produto do catálogo?")) setProducts(products.filter((p) => p.id !== id)); }
+  // Ao salvar, compara o estoque anterior (editing) com o novo (p), por cor
+  // e tamanho. Aumento gera peças individuais novas (numeradas .1 .2 .3...,
+  // contínuo por SKU); redução remove peças disponíveis (ainda não vendidas)
+  // dessa cor/tamanho — peças já vendidas em algum pedido nunca são tocadas.
   function save(p) {
     const exists = products.some((x) => x.id === p.id);
-    setProducts(exists ? products.map((x) => (x.id === p.id ? p : x)) : [p, ...products]);
+    const originalVariants = editing?.variants || [];
+    const newStockItems = [];
+    const removedIds = [];
+    let seqCursor = p.nextItemSeq || 1;
+    (p.variants || []).forEach((v) => {
+      const orig = originalVariants.find((ov) => ov.id === v.id);
+      SIZES.forEach((s) => {
+        const oldQty = orig?.stock?.[s] || 0;
+        const newQty = v.stock?.[s] || 0;
+        const delta = newQty - oldQty;
+        if (delta > 0) {
+          for (let i = 0; i < delta; i++) {
+            newStockItems.push({
+              id: uid("si_"), productId: p.id, variantId: v.id, model: p.model, sku: p.sku || p.model || "ITEM",
+              color: v.color, hex: v.hex, size: s, seq: seqCursor, orderId: null, createdAt: new Date().toISOString(),
+            });
+            seqCursor++;
+          }
+        } else if (delta < 0) {
+          const candidates = (stockItems || []).filter((si) => si.productId === p.id && si.variantId === v.id && si.size === s && !si.orderId);
+          removedIds.push(...candidates.slice(0, -delta).map((si) => si.id));
+        }
+      });
+    });
+    const nextP = { ...p, nextItemSeq: seqCursor };
+    setProducts(exists ? products.map((x) => (x.id === p.id ? nextP : x)) : [nextP, ...products]);
+    if (newStockItems.length || removedIds.length) {
+      setStockItems([...(stockItems || []).filter((si) => !removedIds.includes(si.id)), ...newStockItems]);
+    }
     setShowForm(false); setEditing(null);
   }
 
@@ -1683,6 +1768,110 @@ function ProdutosAdmin({ products, setProducts }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ItemListAdmin({ stockItems, setStockItems, orders }) {
+  const [selected, setSelected] = useState({});
+  const [printingBulk, setPrintingBulk] = useState(false);
+  const [printingId, setPrintingId] = useState("");
+
+  const list = [...(stockItems || [])].sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.color || "").localeCompare(b.color || "") || (a.seq || 0) - (b.seq || 0));
+  const selectableIds = list.filter((si) => !si.orderId).map((si) => si.id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id]);
+
+  function toggleAll() {
+    if (allSelected) { setSelected({}); return; }
+    const next = {};
+    selectableIds.forEach((id) => { next[id] = true; });
+    setSelected(next);
+  }
+  function toggleOne(id) { setSelected((s) => ({ ...s, [id]: !s[id] })); }
+
+  function orderOf(orderId) { return orders.find((o) => o.id === orderId); }
+
+  function downloadPdf(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function printOne(si) {
+    setPrintingId(si.id);
+    try {
+      const blob = await buildItemLabelsPdfBlob([{ model: si.model, color: si.color, size: si.size, code: `${si.sku}.${si.seq}` }]);
+      downloadPdf(blob, `etiqueta-${si.sku}.${si.seq}.pdf`);
+    } catch (e) {
+      alert(`Não foi possível gerar a etiqueta agora.\nDetalhe do erro: ${e?.message || e}`);
+    } finally { setPrintingId(""); }
+  }
+
+  async function printSelected() {
+    const items = list.filter((si) => selected[si.id]);
+    if (!items.length) { alert("Selecione ao menos um item para imprimir."); return; }
+    setPrintingBulk(true);
+    try {
+      const blob = await buildItemLabelsPdfBlob(items.map((si) => ({ model: si.model, color: si.color, size: si.size, code: `${si.sku}.${si.seq}` })));
+      downloadPdf(blob, `etiquetas-selecionadas.pdf`);
+    } catch (e) {
+      alert(`Não foi possível gerar as etiquetas agora.\nDetalhe do erro: ${e?.message || e}`);
+    } finally { setPrintingBulk(false); }
+  }
+
+  function deleteOne(si) {
+    if (si.orderId) return;
+    if (!confirm(`Excluir a peça ${si.sku}.${si.seq}?`)) return;
+    setStockItems(stockItems.filter((x) => x.id !== si.id));
+  }
+
+  function deleteSelected() {
+    const ids = Object.keys(selected).filter((id) => selected[id]);
+    if (!ids.length) { alert("Selecione ao menos um item para excluir."); return; }
+    if (!confirm(`Excluir ${ids.length} peça(s) selecionada(s)?`)) return;
+    setStockItems(stockItems.filter((si) => !ids.includes(si.id)));
+    setSelected({});
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 6 }}>Listagem de itens</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Cada peça lançada no estoque vira uma linha aqui, numerada por SKU (.1 .2 .3...). Peças já vendidas mostram em qual pedido entraram e não podem ser excluídas ou selecionadas.</div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}`, flexWrap: "wrap", gap: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: TOKENS.graphite }}>
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectableIds.length} /> Selecionar todos
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={printSelected} disabled={printingBulk} style={btnGhostSmall}><Printer size={13} /> {printingBulk ? "Gerando..." : "Imprimir selecionados"}</button>
+            <button onClick={deleteSelected} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> Excluir selecionados</button>
+          </div>
+        </div>
+        {list.length === 0 && <div style={{ padding: 20, fontSize: 13, color: TOKENS.graphite }}>Nenhum item lançado ainda. Cadastre estoque em Produtos & Estoque.</div>}
+        {list.map((si) => {
+          const sold = !!si.orderId;
+          const order = sold ? orderOf(si.orderId) : null;
+          return (
+            <div key={si.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}`, background: sold ? TOKENS.ivorySoft : "#fff" }}>
+              <input type="checkbox" checked={!!selected[si.id]} disabled={sold} onChange={() => toggleOne(si.id)} />
+              <span style={{ width: 14, height: 14, borderRadius: "50%", background: si.hex, border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} />
+              <span style={{ fontSize: 13, flex: 1, color: TOKENS.ink }}>{si.model} <span style={{ color: TOKENS.graphite }}>· {si.color}</span></span>
+              <span style={{ fontSize: 12, color: TOKENS.graphite, fontFamily: "monospace" }}>{si.sku}.{si.seq}</span>
+              <span style={{ fontSize: 11, color: TOKENS.graphite, width: 26 }}>{si.size}</span>
+              {sold ? (
+                <span style={{ fontSize: 10.5, color: TOKENS.graphite }}>Vendido · pedido de {order?.clientName || "?"}{order ? ` (${order.status})` : ""}</span>
+              ) : (
+                <>
+                  <button onClick={() => printOne(si)} disabled={printingId === si.id} style={iconBtnStyle}><Printer size={15} /></button>
+                  <button onClick={() => deleteOne(si)} style={{ ...iconBtnStyle, color: "#A5453F" }}><Trash2 size={15} /></button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
