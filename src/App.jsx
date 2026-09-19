@@ -1676,7 +1676,7 @@ function VariantEditor({ v, productModel, productSku, onChange, onRemove, onAddI
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      alert("Não foi possível gerar as etiquetas agora. Tente novamente em alguns segundos.");
+      alert(`Não foi possível gerar as etiquetas agora.\nDetalhe do erro: ${e?.message || e}`);
     } finally { setGeneratingLabels(false); }
   }
 
