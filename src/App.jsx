@@ -338,10 +338,31 @@ export default function App() {
   // respeita a disponibilidade — se faltar estoque para algum item, a
   // quantidade copiada é reduzida ao que houver disponível (avisando o
   // usuário), e itens sem nenhum estoque disponível são deixados de fora.
-  function copyOrderToClient(order, client) {
+  // Copia os itens de um pedido existente para o CARRINHO (não cria o pedido
+  // direto), atribuído a outro cliente, para revisão antes de finalizar.
+  // Se o carrinho já tiver itens, avisa que serão substituídos. Cada item
+  // copiado reserva o quanto houver disponível agora — se a quantidade do
+  // pedido original for maior que o estoque atual, o item entra "incompleto"
+  // (qty > reserved); a tela do carrinho mostra esses itens em vermelho, e
+  // só libera "Finalizar pedido" quando o usuário reduzir a quantidade até
+  // bater com o que está reservado (ou remover o item).
+  function copyOrderToCart(order, client) {
+    if (cart.length) {
+      const proceed = confirm("Você já tem itens no carrinho. Copiar este pedido vai substituir o que está lá agora pelos itens da cópia. Deseja continuar?");
+      if (!proceed) return;
+    }
     let nextProducts = products;
-    const newItems = [];
-    const shortages = [];
+    // devolve ao estoque o que o carrinho atual já tinha reservado
+    cart.forEach((item) => {
+      const reservedAmt = item.reserved ?? item.qty;
+      if (!reservedAmt) return;
+      nextProducts = nextProducts.map((p) => p.id !== item.productId ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + reservedAmt } }),
+      });
+    });
+
+    const newCartItems = [];
     order.items.forEach((it) => {
       let productId = it.productId, variantId = it.variantId;
       if (!productId || !variantId) {
@@ -351,32 +372,26 @@ export default function App() {
       }
       const liveProduct = nextProducts.find((p) => p.id === productId);
       const liveVariant = liveProduct?.variants.find((v) => v.id === variantId);
-      const available = liveVariant ? (liveVariant.stock?.[it.size] || 0) : null;
-      let qtyToAdd = it.qty;
-      if (available !== null) {
-        qtyToAdd = Math.min(available, it.qty);
-        if (qtyToAdd < it.qty) shortages.push(`${it.model} (${it.color}, ${it.size}): só ${qtyToAdd} de ${it.qty} disponível`);
-        if (qtyToAdd > 0) {
-          nextProducts = nextProducts.map((p) => p.id !== productId ? p : {
-            ...p,
-            variants: p.variants.map((v) => v.id !== variantId ? v : { ...v, stock: { ...v.stock, [it.size]: available - qtyToAdd } }),
-          });
-        }
+      const available = liveVariant ? (liveVariant.stock?.[it.size] || 0) : 0;
+      const reserved = Math.min(available, it.qty);
+      if (reserved > 0) {
+        nextProducts = nextProducts.map((p) => p.id !== productId ? p : {
+          ...p,
+          variants: p.variants.map((v) => v.id !== variantId ? v : { ...v, stock: { ...v.stock, [it.size]: available - reserved } }),
+        });
       }
-      if (qtyToAdd > 0) newItems.push({ ...it, qty: qtyToAdd, productId, variantId });
+      newCartItems.push({
+        cartItemId: uid(`cp_${it.size}_`), productId, variantId,
+        model: it.model, category: it.category, price: it.price,
+        color: it.color, hex: liveVariant?.hex || "#DCD2BE", size: it.size,
+        qty: it.qty, reserved, image: it.image || null,
+      });
     });
-    if (!newItems.length) { alert("Não foi possível copiar o pedido: nenhum item com estoque disponível."); return; }
-    if (nextProducts !== products) persistProducts(nextProducts);
-    const record = {
-      id: uid("ord_"), date: new Date().toISOString(),
-      clientName: client?.buyerName || "Cliente não informado",
-      sellerName: session.name || session.username, sellerRole: session.role, sellerUsername: session.username,
-      items: newItems,
-      status: "Enviado à fábrica",
-      statusLog: [{ status: "Enviado à fábrica", by: session.name || session.username, when: new Date().toISOString() }],
-    };
-    persistOrders([...orders, record]);
-    if (shortages.length) alert(`Pedido copiado, mas com ajustes por falta de estoque:\n${shortages.join("\n")}`);
+
+    persistProducts(nextProducts);
+    persistCart(newCartItems);
+    setSelectedClient(client);
+    setCartOpen(true);
   }
 
   async function handleLogin(username) {
@@ -416,11 +431,11 @@ export default function App() {
 
       const existing = nextCart.find((c) => c.cartItemId === cartItemId);
       if (existing) {
-        nextCart = nextCart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: c.qty + addQty } : c);
+        nextCart = nextCart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: c.qty + addQty, reserved: (c.reserved ?? c.qty) + addQty } : c);
       } else {
         nextCart = [...nextCart, {
           cartItemId, productId: product.id, variantId: variant.id, model: product.model, category: product.category, price: product.price,
-          color: variant.color, hex: variant.hex, size, qty: addQty,
+          color: variant.color, hex: variant.hex, size, qty: addQty, reserved: addQty,
           image: variant.images[0] || null,
         }];
       }
@@ -436,11 +451,13 @@ export default function App() {
   function updateCartQty(cartItemId, qty) {
     const item = cart.find((c) => c.cartItemId === cartItemId);
     if (!item) return;
+    const currentReserved = item.reserved ?? item.qty;
     const liveProduct = products.find((p) => p.id === item.productId);
     const liveVariant = liveProduct?.variants.find((v) => v.id === item.variantId);
-    const availableNow = liveVariant?.stock?.[item.size] || 0;
-    const newQty = Math.max(1, Math.min(availableNow + item.qty, qty));
-    const delta = newQty - item.qty;
+    const availableNow = liveVariant?.stock?.[item.size] || 0; // livre agora, sem contar o que este item já reservou
+    const desiredQty = Math.max(1, qty);
+    const newReserved = Math.min(desiredQty, availableNow + currentReserved);
+    const delta = newReserved - currentReserved;
     if (delta !== 0) {
       const nextProducts = products.map((p) => p.id !== item.productId ? p : {
         ...p,
@@ -448,16 +465,19 @@ export default function App() {
       });
       persistProducts(nextProducts);
     }
-    persistCart(cart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: newQty } : c));
+    persistCart(cart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: desiredQty, reserved: newReserved } : c));
   }
   function removeCartItem(cartItemId) {
     const item = cart.find((c) => c.cartItemId === cartItemId);
     if (item) {
-      const nextProducts = products.map((p) => p.id !== item.productId ? p : {
-        ...p,
-        variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + item.qty } }),
-      });
-      persistProducts(nextProducts);
+      const reservedAmt = item.reserved ?? item.qty;
+      if (reservedAmt) {
+        const nextProducts = products.map((p) => p.id !== item.productId ? p : {
+          ...p,
+          variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + reservedAmt } }),
+        });
+        persistProducts(nextProducts);
+      }
     }
     persistCart(cart.filter((c) => c.cartItemId !== cartItemId));
   }
@@ -465,9 +485,11 @@ export default function App() {
     if (cart.length) {
       let nextProducts = products;
       cart.forEach((item) => {
+        const reservedAmt = item.reserved ?? item.qty;
+        if (!reservedAmt) return;
         nextProducts = nextProducts.map((p) => p.id !== item.productId ? p : {
           ...p,
-          variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + item.qty } }),
+          variants: p.variants.map((v) => v.id !== item.variantId ? v : { ...v, stock: { ...v.stock, [item.size]: (v.stock?.[item.size] || 0) + reservedAmt } }),
         });
       });
       persistProducts(nextProducts);
@@ -478,6 +500,10 @@ export default function App() {
 
   function finalizeOrder() {
     if (!cart.length || !session) return;
+    if (cart.some((c) => (c.reserved ?? c.qty) < c.qty)) {
+      alert("Ainda há itens com estoque insuficiente (em vermelho). Ajuste a quantidade ou remova esses itens antes de finalizar.");
+      return;
+    }
     const items = cart.map((c) => {
       const prod = products.find((p) => p.id === c.productId);
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId };
@@ -513,13 +539,13 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToClient} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} />
       ) : screen === "central" && session.role === "admincentral" ? (
-        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToClient} />
+        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
         <RepClientsPanel clients={clients} setClients={persistClients} session={session} />
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
-        <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToClient} />
+        <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToCart} />
       ) : (
         <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} />
       )}
@@ -856,6 +882,7 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
   const hasEmail = orderEmail.length > 3 && orderEmail.includes("@");
   const hasWhats = waDigits.length >= 10;
   const clientReady = !needsClientSelect || !!selectedClient;
+  const hasInsufficientStock = cart.some((c) => (c.reserved ?? c.qty) < c.qty);
   const pdfFileName = `pedido-${(session.name || session.username).replace(/\s+/g, "-").toLowerCase()}.pdf`;
 
   async function downloadImage() {
@@ -954,20 +981,24 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
             {clientPicker}
             <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
               {cart.length === 0 && <div style={{ color: TOKENS.graphite, fontSize: 13, textAlign: "center", marginTop: 40 }}>Seu carrinho está vazio.</div>}
-              {cart.map((c) => (
-                <div key={c.cartItemId} style={{ display: "flex", gap: 10, background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 10, marginBottom: 10 }}>
+              {cart.map((c) => {
+                const reservedQty = c.reserved ?? c.qty;
+                const insufficient = reservedQty < c.qty;
+                return (
+                <div key={c.cartItemId} style={{ display: "flex", gap: 10, background: "#fff", border: `1px solid ${insufficient ? "#E3B3B3" : TOKENS.line}`, borderRadius: 4, padding: 10, marginBottom: 10 }}>
                   <div style={{ width: 54, height: 68, background: TOKENS.ivorySoft, borderRadius: 3, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                     {c.image ? <img src={c.image} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={18} color={TOKENS.line} />}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink }}>{c.model}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: insufficient ? "#A5453F" : TOKENS.ink }}>{c.model}</div>
                     <div style={{ fontSize: 11, color: TOKENS.graphite, display: "flex", alignItems: "center", gap: 5, margin: "3px 0" }}>
                       <span style={{ width: 10, height: 10, borderRadius: "50%", background: c.hex, display: "inline-block", border: `1px solid ${TOKENS.line}` }} /> {c.color} · Tam {c.size}
                     </div>
+                    {insufficient && <div style={{ fontSize: 10.5, color: "#A5453F", marginBottom: 4 }}>Só {reservedQty} disponível — reduza a quantidade para {reservedQty} ou menos.</div>}
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
-                      <div style={{ display: "flex", alignItems: "center", border: `1px solid ${TOKENS.line}`, borderRadius: 3 }}>
+                      <div style={{ display: "flex", alignItems: "center", border: `1px solid ${insufficient ? "#E3B3B3" : TOKENS.line}`, borderRadius: 3 }}>
                         <button onClick={() => updateCartQty(c.cartItemId, c.qty - 1)} style={qtyBtnStyle}><Minus size={11} /></button>
-                        <span style={{ width: 22, textAlign: "center", fontSize: 12 }}>{c.qty}</span>
+                        <span style={{ width: 22, textAlign: "center", fontSize: 12, color: insufficient ? "#A5453F" : TOKENS.ink, fontWeight: insufficient ? 700 : 400 }}>{c.qty}</span>
                         <button onClick={() => updateCartQty(c.cartItemId, c.qty + 1)} style={qtyBtnStyle}><Plus size={11} /></button>
                       </div>
                       {showPrice && <div style={{ fontSize: 12.5, color: TOKENS.wine, fontWeight: 600 }}>R$ {formatBRL(parseBRL(c.price) * c.qty)}</div>}
@@ -975,12 +1006,14 @@ function CartDrawer({ cart, onClose, showPrice, updateCartQty, removeCartItem, c
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
             {cart.length > 0 && (
               <div style={{ padding: 16, borderTop: `1px solid ${TOKENS.line}`, background: "#fff" }}>
                 {showPrice && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 15 }}><span>Total</span><b style={{ color: TOKENS.wine, fontFamily: "Georgia, serif", fontSize: 19 }}>R$ {formatBRL(total)}</b></div>}
-                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient }); onFinalizeOrder(); setStep("finalize"); }} disabled={!clientReady} title={!clientReady ? "Selecione um cliente para este pedido" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: clientReady ? 1 : 0.5, cursor: clientReady ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
+                {hasInsufficientStock && <div style={{ fontSize: 11.5, color: "#A5453F", marginBottom: 8, textAlign: "center" }}>Ajuste os itens em vermelho (estoque insuficiente) antes de finalizar.</div>}
+                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient }); onFinalizeOrder(); setStep("finalize"); }} disabled={!clientReady || hasInsufficientStock} title={!clientReady ? "Selecione um cliente para este pedido" : hasInsufficientStock ? "Ajuste os itens em vermelho antes de finalizar" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (clientReady && !hasInsufficientStock) ? 1 : 0.5, cursor: (clientReady && !hasInsufficientStock) ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
                 {!clientReady && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 6, textAlign: "center" }}>Selecione o cliente acima para continuar.</div>}
                 <button onClick={() => { if (confirm("Esvaziar o carrinho?")) clearCart(); }} style={{ ...btnGhostSmall, width: "100%", justifyContent: "center", marginTop: 8 }}>Esvaziar carrinho</button>
               </div>
@@ -1460,7 +1493,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
             </div>
             <div style={{ padding: 20 }}>
               <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 14, lineHeight: 1.5 }}>
-                Cria um novo pedido com os mesmos itens de "{copyModalOrder.clientName}", atribuído ao cliente selecionado abaixo. O estoque é abatido normalmente, como em qualquer pedido novo — se faltar estoque para algum item, a quantidade copiada é ajustada.
+                Leva os mesmos itens de "{copyModalOrder.clientName}" para o seu carrinho, já atribuídos ao cliente selecionado abaixo, para você revisar antes de finalizar. Se você já tiver itens no carrinho, eles serão substituídos.
               </div>
               <FieldLabel>Cliente de destino</FieldLabel>
               <select value={copyClientId} onChange={(e) => setCopyClientId(e.target.value)} style={inputStyle}>
