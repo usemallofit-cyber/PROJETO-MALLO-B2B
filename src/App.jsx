@@ -1187,7 +1187,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
         })}
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
-      {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} />}
+      {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -1773,7 +1773,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
   );
 }
 
-function ItemListAdmin({ stockItems, setStockItems, orders }) {
+function ItemListAdmin({ stockItems, setStockItems, orders, products, setProducts }) {
   const [selected, setSelected] = useState({});
   const [printingBulk, setPrintingBulk] = useState(false);
   const [printingId, setPrintingId] = useState("");
@@ -1822,16 +1822,39 @@ function ItemListAdmin({ stockItems, setStockItems, orders }) {
     } finally { setPrintingBulk(false); }
   }
 
+  // Ao excluir uma peça (individual ou em lote) da listagem, abate também
+  // a mesma quantidade do estoque do produto correspondente, já que a peça
+  // deixou de existir fisicamente. entries: [{productId, variantId, size, qty}]
+  function decrementStockFor(entries) {
+    let nextProducts = products;
+    entries.forEach(({ productId, variantId, size, qty }) => {
+      nextProducts = nextProducts.map((p) => p.id !== productId ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== variantId ? v : { ...v, stock: { ...v.stock, [size]: Math.max(0, (v.stock?.[size] || 0) - qty) } }),
+      });
+    });
+    setProducts(nextProducts);
+  }
+
   function deleteOne(si) {
     if (si.orderId) return;
-    if (!confirm(`Excluir a peça ${si.sku}.${si.seq}?`)) return;
+    if (!confirm(`Excluir a peça ${si.sku}.${si.seq}? Isso também abate 1 unidade do estoque de ${si.color} · ${si.size}.`)) return;
+    decrementStockFor([{ productId: si.productId, variantId: si.variantId, size: si.size, qty: 1 }]);
     setStockItems(stockItems.filter((x) => x.id !== si.id));
   }
 
   function deleteSelected() {
     const ids = Object.keys(selected).filter((id) => selected[id]);
     if (!ids.length) { alert("Selecione ao menos um item para excluir."); return; }
-    if (!confirm(`Excluir ${ids.length} peça(s) selecionada(s)?`)) return;
+    if (!confirm(`Excluir ${ids.length} peça(s) selecionada(s)? Isso também abate do estoque de cada uma.`)) return;
+    const toDelete = list.filter((si) => ids.includes(si.id));
+    const grouped = {};
+    toDelete.forEach((si) => {
+      const key = `${si.productId}__${si.variantId}__${si.size}`;
+      if (!grouped[key]) grouped[key] = { productId: si.productId, variantId: si.variantId, size: si.size, qty: 0 };
+      grouped[key].qty++;
+    });
+    decrementStockFor(Object.values(grouped));
     setStockItems(stockItems.filter((si) => !ids.includes(si.id)));
     setSelected({});
   }
