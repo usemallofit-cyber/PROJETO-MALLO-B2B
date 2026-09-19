@@ -97,6 +97,55 @@ function loadJsPDF() {
   return _jsPdfLoading;
 }
 
+// Mesmo esquema para a biblioteca de código de barras (JsBarcode), usada nas
+// etiquetas de estoque.
+let _jsBarcodeLoading = null;
+function loadJsBarcode() {
+  if (window.JsBarcode) return Promise.resolve(window.JsBarcode);
+  if (_jsBarcodeLoading) return _jsBarcodeLoading;
+  _jsBarcodeLoading = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js";
+    script.onload = () => resolve(window.JsBarcode);
+    script.onerror = () => reject(new Error("Falha ao carregar JsBarcode"));
+    document.head.appendChild(script);
+  });
+  return _jsBarcodeLoading;
+}
+
+// Gera um PDF com uma etiqueta por página, no tamanho comum de impressora
+// térmica de etiquetas (50 x 30mm), uma para cada tamanho com estoque > 0
+// nesta cor. Cada etiqueta traz o modelo, a cor, o tamanho e um código de
+// barras (Code128) pronto para leitura com leitor/bip. O código combina
+// SKU (ou nome do modelo) + cor + tamanho, para ficar único por peça.
+async function buildStockLabelsPdfBlob(productModel, productSku, variant) {
+  const jsPDF = await loadJsPDF();
+  const JsBarcode = await loadJsBarcode();
+  const sizesWithStock = SIZES.filter((s) => (variant.stock?.[s] || 0) > 0);
+  if (!sizesWithStock.length) return null;
+
+  const doc = new jsPDF({ unit: "mm", format: [50, 30] });
+  const baseCode = (productSku || productModel || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
+  const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+
+  sizesWithStock.forEach((s, i) => {
+    if (i > 0) doc.addPage([50, 30]);
+    const code = `${baseCode}-${colorCode}-${s}`;
+    const canvas = document.createElement("canvas");
+    JsBarcode(canvas, code, { format: "CODE128", width: 1.6, height: 34, displayValue: false, margin: 0 });
+    const barcodeDataUrl = canvas.toDataURL("image/png");
+
+    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+    doc.text(productModel || "", 3, 5, { maxWidth: 44 });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+    doc.text(`${variant.color || ""} · Tam ${s}`, 3, 9.5);
+    doc.addImage(barcodeDataUrl, "PNG", 3, 12, 44, 11);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6);
+    doc.text(code, 25, 26, { align: "center" });
+  });
+  return doc.output("blob");
+}
+
 // Gera um PDF real (sempre 1 página, a menos que o pedido seja gigante) a partir
 // de uma lista de itens de pedido. Usado tanto no carrinho do cliente quanto na
 // aba Pedidos do painel — troca window.print() (que duplicava página) por um PDF
@@ -1650,6 +1699,7 @@ function ProductForm({ initial, onCancel, onSave }) {
 
           {p.variants.map((v) => (
             <VariantEditor key={v.id} v={v}
+              productModel={p.model} productSku={p.sku}
               onChange={(patch) => updateVariant(v.id, patch)}
               onRemove={() => removeVariant(v.id)}
               onAddImages={(files) => addVariantImages(v.id, files, v.images)}
@@ -1667,8 +1717,25 @@ function ProductForm({ initial, onCancel, onSave }) {
   );
 }
 
-function VariantEditor({ v, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
+function VariantEditor({ v, productModel, productSku, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
   const fileRef = useRef();
+  const [generatingLabels, setGeneratingLabels] = useState(false);
+
+  async function handleGenerateLabels() {
+    setGeneratingLabels(true);
+    try {
+      const blob = await buildStockLabelsPdfBlob(productModel, productSku, v);
+      if (!blob) { alert("Nenhum tamanho desta cor tem estoque lançado ainda — lance o estoque antes de gerar as etiquetas."); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `etiquetas-${(productModel || "produto").replace(/\s+/g, "-").toLowerCase()}-${(v.color || "cor").replace(/\s+/g, "-").toLowerCase()}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Não foi possível gerar as etiquetas agora. Tente novamente em alguns segundos.");
+    } finally { setGeneratingLabels(false); }
+  }
+
   return (
     <div style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, marginBottom: 12, background: TOKENS.ivorySoft }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
@@ -1705,6 +1772,10 @@ function VariantEditor({ v, onChange, onRemove, onAddImages, onRemoveImage, onSe
           </div>
         ))}
       </div>
+      <button onClick={handleGenerateLabels} disabled={generatingLabels} style={{ ...btnGhostSmall, width: "100%", justifyContent: "center", marginTop: 10 }}>
+        <Printer size={13} /> {generatingLabels ? "Gerando..." : "Gerar etiquetas (código de barras)"}
+      </button>
+      <div style={{ fontSize: 9.5, color: TOKENS.graphite, marginTop: 4, lineHeight: 1.4 }}>Uma etiqueta por tamanho com estoque, em PDF (50x30mm), pronta para a impressora térmica.</div>
     </div>
   );
 }
