@@ -740,13 +740,19 @@ function ProductCard({ p, showPrice, addToCart }) {
       </div>
       <div style={{ padding: "14px 16px 16px" }}>
         {p.category && <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: TOKENS.wine, marginBottom: 3 }}>{p.category}</div>}
-        <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink }}>{p.model}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+          <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink }}>{p.model}</div>
+          {!variant.color && showPrice && <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.wine, whiteSpace: "nowrap" }}>R$ {p.price}</div>}
+        </div>
         {p.sku && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 1 }}>SKU: {p.sku}</div>}
         <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginTop: 4, lineHeight: 1.4, minHeight: 32 }}>{p.description}</div>
 
         {variant.color && (
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginBottom: 5 }}>Cor: <b style={{ color: TOKENS.ink }}>{variant.color}</b></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+              <div style={{ fontSize: 10.5, color: TOKENS.graphite }}>Cor: <b style={{ color: TOKENS.ink }}>{variant.color}</b></div>
+              {showPrice && <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.wine }}>R$ {p.price}</div>}
+            </div>
             <div style={{ display: "flex", gap: 8 }}>
               {variants.map((v, i) => (
                 <button key={v.id} onClick={() => setVIdx(i)} title={v.color} style={{
@@ -790,8 +796,6 @@ function ProductCard({ p, showPrice, addToCart }) {
             );
           })}
         </div>
-
-        {showPrice && <div style={{ marginTop: 12, fontFamily: "Georgia, serif", fontSize: 19, color: TOKENS.wine }}>R$ {p.price}</div>}
 
         <div style={{ marginTop: 12 }}>
           <button
