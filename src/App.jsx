@@ -114,21 +114,27 @@ function loadJsBarcode() {
 }
 
 // Gera um PDF com uma etiqueta por página, no tamanho comum de impressora
-// térmica de etiquetas (50 x 30mm), uma para cada tamanho com estoque > 0
-// nesta cor. Cada etiqueta traz o modelo, a cor, o tamanho e um código de
-// barras (Code128) pronto para leitura com leitor/bip. O código combina
-// SKU (ou nome do modelo) + cor + tamanho, para ficar único por peça.
-async function buildStockLabelsPdfBlob(productModel, productSku, variant) {
+// térmica de etiquetas (50 x 30mm), para UMA cor/variação, repetindo a
+// etiqueta de cada tamanho conforme a quantidade escolhida em qtyBySize
+// (ex.: {P:10, M:0, G:0, GG:6} gera 10 etiquetas de P e 6 de GG). Cada
+// etiqueta traz o modelo, a cor, o tamanho e um código de barras (Code128)
+// pronto para leitura com leitor/bip. O código combina SKU (ou nome do
+// modelo) + cor + tamanho, para ficar único por peça.
+async function buildStockLabelsPdfBlob(productModel, productSku, variant, qtyBySize) {
   const jsPDF = await loadJsPDF();
   const JsBarcode = await loadJsBarcode();
-  const sizesWithStock = SIZES.filter((s) => (variant.stock?.[s] || 0) > 0);
-  if (!sizesWithStock.length) return null;
+  const labels = [];
+  SIZES.forEach((s) => {
+    const n = Math.max(0, Math.floor(Number(qtyBySize?.[s]) || 0));
+    for (let i = 0; i < n; i++) labels.push(s);
+  });
+  if (!labels.length) return null;
 
   const doc = new jsPDF({ unit: "mm", format: [50, 30] });
   const baseCode = (productSku || productModel || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
   const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
 
-  sizesWithStock.forEach((s, i) => {
+  labels.forEach((s, i) => {
     if (i > 0) doc.addPage([50, 30]);
     const code = `${baseCode}-${colorCode}-${s}`;
     const canvas = document.createElement("canvas");
@@ -1544,6 +1550,10 @@ function ProdutosAdmin({ products, setProducts }) {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filterCat, setFilterCat] = useState("Todas");
+  const [selectedVariantByProduct, setSelectedVariantByProduct] = useState({});
+  const [labelModal, setLabelModal] = useState(null); // { product, variant }
+  const [labelQty, setLabelQty] = useState({ P: 0, M: 0, G: 0, GG: 0 });
+  const [generatingLabels, setGeneratingLabels] = useState(false);
 
   function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: CATEGORIES[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
   function startEdit(p) { setEditing({ ...p, variants: p.variants.map((v) => ({ ...v, stock: { ...v.stock } })) }); setShowForm(true); }
@@ -1552,6 +1562,35 @@ function ProdutosAdmin({ products, setProducts }) {
     const exists = products.some((x) => x.id === p.id);
     setProducts(exists ? products.map((x) => (x.id === p.id ? p : x)) : [p, ...products]);
     setShowForm(false); setEditing(null);
+  }
+
+  function selectedVariantOf(p) {
+    const vid = selectedVariantByProduct[p.id];
+    return (p.variants || []).find((v) => v.id === vid) || p.variants?.[0] || null;
+  }
+
+  function openLabelModal(p) {
+    const variant = selectedVariantOf(p);
+    if (!variant) { alert("Cadastre pelo menos uma cor para este produto antes de gerar etiquetas."); return; }
+    setLabelModal({ product: p, variant });
+    setLabelQty({ P: variant.stock?.P || 0, M: variant.stock?.M || 0, G: variant.stock?.G || 0, GG: variant.stock?.GG || 0 });
+  }
+
+  async function confirmGenerateLabels() {
+    setGeneratingLabels(true);
+    try {
+      const { product, variant } = labelModal;
+      const blob = await buildStockLabelsPdfBlob(product.model, product.sku, variant, labelQty);
+      if (!blob) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `etiquetas-${(product.model || "produto").replace(/\s+/g, "-").toLowerCase()}-${(variant.color || "cor").replace(/\s+/g, "-").toLowerCase()}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      setLabelModal(null);
+    } catch (e) {
+      alert(`Não foi possível gerar as etiquetas agora.\nDetalhe do erro: ${e?.message || e}`);
+    } finally { setGeneratingLabels(false); }
   }
 
   const list = filterCat === "Todas" ? products : products.filter((p) => p.category === filterCat);
@@ -1569,7 +1608,9 @@ function ProdutosAdmin({ products, setProducts }) {
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 16 }}>
-        {list.map((p) => (
+        {list.map((p) => {
+          const activeVariant = selectedVariantOf(p);
+          return (
           <div key={p.id} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
             <div style={{ aspectRatio: "3/4", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {p.variants?.[0]?.images?.[0] ? <img src={p.variants[0].images[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={28} color={TOKENS.line} />}
@@ -1578,18 +1619,66 @@ function ProdutosAdmin({ products, setProducts }) {
               <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: TOKENS.wine, marginBottom: 3 }}>{p.category}</div>
               <div style={{ fontWeight: 600, fontSize: 14, color: TOKENS.ink }}>{p.model || "(sem nome)"}</div>
               <div style={{ fontSize: 11.5, color: TOKENS.graphite, margin: "4px 0 6px" }}>R$ {p.price || "0,00"}</div>
-              <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
-                {(p.variants || []).map((v) => <span key={v.id} title={v.color} style={{ width: 14, height: 14, borderRadius: "50%", background: v.hex, border: `1px solid ${TOKENS.line}` }} />)}
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                {(p.variants || []).map((v) => (
+                  <button key={v.id} title={v.color} onClick={() => setSelectedVariantByProduct((s) => ({ ...s, [p.id]: v.id }))} style={{
+                    width: 20, height: 20, borderRadius: "50%", background: v.hex, cursor: "pointer", padding: 0,
+                    border: activeVariant?.id === v.id ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}`,
+                    boxShadow: activeVariant?.id === v.id ? "0 0 0 2px #fff inset" : "none",
+                  }} />
+                ))}
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginBottom: 6, lineHeight: 1.6 }}>
+                {(p.variants || []).map((v) => (
+                  <div key={v.id}>
+                    <b style={{ color: TOKENS.ink }}>{v.color || "(sem nome)"}:</b> {SIZES.map((s) => `${s} ${v.stock?.[s] || 0}`).join(" · ")}
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.ink, borderTop: `1px solid ${TOKENS.line}`, paddingTop: 6, marginBottom: 10 }}>
+                Total: {(p.variants || []).reduce((a, v) => a + SIZES.reduce((b, s) => b + (v.stock?.[s] || 0), 0), 0)} peça(s)
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => startEdit(p)} style={btnGhostSmall}><Pencil size={13} /> Editar</button>
                 <button onClick={() => remove(p.id)} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> Excluir</button>
+                <button onClick={() => openLabelModal(p)} style={btnGhostSmall}><Printer size={13} /> Etiquetas {activeVariant ? `(${activeVariant.color})` : ""}</button>
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       {showForm && <ProductForm initial={editing} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
+
+      {labelModal && (
+        <div style={overlayStyle}>
+          <div style={{ ...modalStyle, maxWidth: 420 }}>
+            <div style={modalHeaderStyle}>
+              <div style={{ fontFamily: "Georgia, serif", fontSize: 16 }}>Gerar etiquetas</div>
+              <button onClick={() => setLabelModal(null)} style={iconBtnStyle}><X size={18} /></button>
+            </div>
+            <div style={{ padding: 20 }}>
+              <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 14, lineHeight: 1.5 }}>
+                <b style={{ color: TOKENS.ink }}>{labelModal.product.model}</b> · {labelModal.variant.color}<br />
+                Confira a quantidade de etiquetas por tamanho — já vem preenchido com o estoque atual, mas você pode ajustar antes de gerar.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {SIZES.map((s) => (
+                  <div key={s} style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10.5, textAlign: "center", color: TOKENS.graphite, marginBottom: 3 }}>{s}</div>
+                    <input type="number" min={0} value={labelQty[s]} onChange={(e) => setLabelQty((q) => ({ ...q, [s]: Math.max(0, Number(e.target.value) || 0) }))} style={{ ...inputStyle, textAlign: "center", padding: "7px 4px" }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 10 }}>Total de etiquetas: {SIZES.reduce((a, s) => a + (Number(labelQty[s]) || 0), 0)}</div>
+            </div>
+            <div style={modalFooterStyle}>
+              <button onClick={() => setLabelModal(null)} style={btnGhostSmall}>Cancelar</button>
+              <button onClick={confirmGenerateLabels} disabled={generatingLabels} style={btnPrimary}><Printer size={15} /> {generatingLabels ? "Gerando..." : "Gerar etiquetas"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1643,7 +1732,6 @@ function ProductForm({ initial, onCancel, onSave }) {
 
           {p.variants.map((v) => (
             <VariantEditor key={v.id} v={v}
-              productModel={p.model} productSku={p.sku}
               onChange={(patch) => updateVariant(v.id, patch)}
               onRemove={() => removeVariant(v.id)}
               onAddImages={(files) => addVariantImages(v.id, files, v.images)}
@@ -1661,24 +1749,8 @@ function ProductForm({ initial, onCancel, onSave }) {
   );
 }
 
-function VariantEditor({ v, productModel, productSku, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
+function VariantEditor({ v, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
   const fileRef = useRef();
-  const [generatingLabels, setGeneratingLabels] = useState(false);
-
-  async function handleGenerateLabels() {
-    setGeneratingLabels(true);
-    try {
-      const blob = await buildStockLabelsPdfBlob(productModel, productSku, v);
-      if (!blob) { alert("Nenhum tamanho desta cor tem estoque lançado ainda — lance o estoque antes de gerar as etiquetas."); return; }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `etiquetas-${(productModel || "produto").replace(/\s+/g, "-").toLowerCase()}-${(v.color || "cor").replace(/\s+/g, "-").toLowerCase()}.pdf`;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      alert(`Não foi possível gerar as etiquetas agora.\nDetalhe do erro: ${e?.message || e}`);
-    } finally { setGeneratingLabels(false); }
-  }
 
   return (
     <div style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, marginBottom: 12, background: TOKENS.ivorySoft }}>
@@ -1716,10 +1788,6 @@ function VariantEditor({ v, productModel, productSku, onChange, onRemove, onAddI
           </div>
         ))}
       </div>
-      <button onClick={handleGenerateLabels} disabled={generatingLabels} style={{ ...btnGhostSmall, width: "100%", justifyContent: "center", marginTop: 10 }}>
-        <Printer size={13} /> {generatingLabels ? "Gerando..." : "Gerar etiquetas (código de barras)"}
-      </button>
-      <div style={{ fontSize: 9.5, color: TOKENS.graphite, marginTop: 4, lineHeight: 1.4 }}>Uma etiqueta por tamanho com estoque, em PDF (50x30mm), pronta para a impressora térmica.</div>
     </div>
   );
 }
