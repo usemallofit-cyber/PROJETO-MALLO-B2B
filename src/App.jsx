@@ -320,14 +320,63 @@ export default function App() {
   function updateOrderStatus(orderId, newStatus) {
     const order = orders.find((o) => o.id === orderId);
     if (!order) return;
-    const wasCancelled = order.status === "Pedido cancelado";
-    const willBeCancelled = newStatus === "Pedido cancelado";
-    if (willBeCancelled && !wasCancelled) adjustStockForOrderItems(order.items, +1);
-    else if (wasCancelled && !willBeCancelled) adjustStockForOrderItems(order.items, -1);
+    if (order.status === "Pedido cancelado") return; // trava: pedido cancelado não pode mudar de status novamente
+    if (newStatus === "Pedido cancelado") {
+      const qtdItens = order.items.reduce((a, it) => a + it.qty, 0);
+      const confirmed = confirm(`Cancelar o pedido de "${order.clientName}"? ${qtdItens} peça(s) vão voltar para o estoque. Depois de cancelado, este pedido não poderá mais ser reativado.`);
+      if (!confirmed) return;
+      adjustStockForOrderItems(order.items, +1);
+    }
     const next = orders.map((o) => o.id === orderId
       ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
       : o);
     persistOrders(next);
+  }
+
+  // Copia os itens de um pedido existente para um novo pedido, atribuído a
+  // outro cliente. É um pedido novo de verdade: abate estoque normalmente e
+  // respeita a disponibilidade — se faltar estoque para algum item, a
+  // quantidade copiada é reduzida ao que houver disponível (avisando o
+  // usuário), e itens sem nenhum estoque disponível são deixados de fora.
+  function copyOrderToClient(order, client) {
+    let nextProducts = products;
+    const newItems = [];
+    const shortages = [];
+    order.items.forEach((it) => {
+      let productId = it.productId, variantId = it.variantId;
+      if (!productId || !variantId) {
+        const prod = nextProducts.find((p) => p.model === it.model);
+        const variant = prod?.variants.find((v) => v.color === it.color);
+        if (prod && variant) { productId = prod.id; variantId = variant.id; }
+      }
+      const liveProduct = nextProducts.find((p) => p.id === productId);
+      const liveVariant = liveProduct?.variants.find((v) => v.id === variantId);
+      const available = liveVariant ? (liveVariant.stock?.[it.size] || 0) : null;
+      let qtyToAdd = it.qty;
+      if (available !== null) {
+        qtyToAdd = Math.min(available, it.qty);
+        if (qtyToAdd < it.qty) shortages.push(`${it.model} (${it.color}, ${it.size}): só ${qtyToAdd} de ${it.qty} disponível`);
+        if (qtyToAdd > 0) {
+          nextProducts = nextProducts.map((p) => p.id !== productId ? p : {
+            ...p,
+            variants: p.variants.map((v) => v.id !== variantId ? v : { ...v, stock: { ...v.stock, [it.size]: available - qtyToAdd } }),
+          });
+        }
+      }
+      if (qtyToAdd > 0) newItems.push({ ...it, qty: qtyToAdd, productId, variantId });
+    });
+    if (!newItems.length) { alert("Não foi possível copiar o pedido: nenhum item com estoque disponível."); return; }
+    if (nextProducts !== products) persistProducts(nextProducts);
+    const record = {
+      id: uid("ord_"), date: new Date().toISOString(),
+      clientName: client?.buyerName || "Cliente não informado",
+      sellerName: session.name || session.username, sellerRole: session.role, sellerUsername: session.username,
+      items: newItems,
+      status: "Enviado à fábrica",
+      statusLog: [{ status: "Enviado à fábrica", by: session.name || session.username, when: new Date().toISOString() }],
+    };
+    persistOrders([...orders, record]);
+    if (shortages.length) alert(`Pedido copiado, mas com ajustes por falta de estoque:\n${shortages.join("\n")}`);
   }
 
   async function handleLogin(username) {
@@ -464,13 +513,13 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToClient} />
       ) : screen === "central" && session.role === "admincentral" ? (
-        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} />
+        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToClient} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
         <RepClientsPanel clients={clients} setClients={persistClients} session={session} />
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
-        <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly />
+        <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToClient} />
       ) : (
         <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} />
       )}
@@ -1011,7 +1060,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder }) {
   const [tab, setTab] = useState("produtos");
   const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
@@ -1035,7 +1084,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
         })}
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} />}
-      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} />}
+      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
       {tab === "representantes" && <ClientesAdmin users={users} setUsers={setUsers} role="representante" title="Login de Representantes" />}
@@ -1046,7 +1095,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
 }
 
 /* ---------------- ADMIN CENTRAL ---------------- */
-function AdminCentralPanel({ users, setUsers, products, setProducts, orders, updateStatus }) {
+function AdminCentralPanel({ users, setUsers, products, setProducts, orders, updateStatus, clients, onCopyOrder }) {
   const [tab, setTab] = useState("funcionarios");
   const tabs = [
     { id: "funcionarios", label: "Login de Funcionários", icon: UserCog },
@@ -1072,7 +1121,7 @@ function AdminCentralPanel({ users, setUsers, products, setProducts, orders, upd
         })}
       </div>
       {tab === "funcionarios" && <ClientesAdmin users={users} setUsers={setUsers} role="admin" title="Login de Funcionários" />}
-      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} />}
+      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "ranking" && <RankingAdmin products={products} orders={orders} />}
       {tab === "abc" && <ABCAdmin orders={orders} />}
       {tab === "estoque" && <EstoqueCustosAdmin products={products} setProducts={setProducts} />}
@@ -1318,9 +1367,11 @@ const ORDER_STATUS_COLORS = {
   "Pedido cancelado": { bg: "#F3DCDC", fg: "#6E2C2C" },
 };
 
-function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
+function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients = [], onCopyOrder }) {
   const list = (scopeUsername ? orders.filter((o) => o.sellerUsername === scopeUsername) : orders).slice().reverse();
   const [downloadingId, setDownloadingId] = useState("");
+  const [copyModalOrder, setCopyModalOrder] = useState(null);
+  const [copyClientId, setCopyClientId] = useState("");
 
   async function downloadOrderPdf(o) {
     setDownloadingId(o.id);
@@ -1336,6 +1387,14 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
     } finally { setDownloadingId(""); }
   }
 
+  function confirmCopy() {
+    const client = clients.find((c) => c.id === copyClientId);
+    if (!client) return;
+    onCopyOrder(copyModalOrder, client);
+    setCopyModalOrder(null);
+    setCopyClientId("");
+  }
+
   return (
     <div>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 16 }}>Pedidos</div>
@@ -1346,6 +1405,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
           const qtdItens = o.items.reduce((a, it) => a + it.qty, 0);
           const lastLog = o.statusLog && o.statusLog[o.statusLog.length - 1];
           const colors = ORDER_STATUS_COLORS[o.status] || { bg: TOKENS.ivorySoft, fg: TOKENS.graphite };
+          const isCancelled = o.status === "Pedido cancelado";
           return (
             <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.6fr 1fr 1.6fr auto", gap: 12, alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
               <div>
@@ -1356,7 +1416,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
               <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>{qtdItens} peça(s)</div>
               <div style={{ fontSize: 13, color: TOKENS.ink }}>R$ {total.toFixed(2).replace(".", ",")}</div>
               <div>
-                {readOnly ? (
+                {(readOnly || isCancelled) ? (
                   <span style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 3, background: colors.bg, color: colors.fg }}>{o.status}</span>
                 ) : (
                   <select value={o.status} onChange={(e) => updateStatus(o.id, e.target.value)} style={{ fontSize: 12, padding: "5px 6px", borderRadius: 3, border: `1px solid ${TOKENS.line}` }}>
@@ -1365,13 +1425,46 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly }) {
                 )}
                 {lastLog && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 4 }}>Alterado por {lastLog.by} · {new Date(lastLog.when).toLocaleString("pt-BR")}</div>}
               </div>
-              <button onClick={() => downloadOrderPdf(o)} disabled={downloadingId === o.id} style={{ ...btnGhostSmall, whiteSpace: "nowrap" }}>
-                <Printer size={13} /> {downloadingId === o.id ? "Gerando..." : "Baixar PDF"}
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => downloadOrderPdf(o)} disabled={downloadingId === o.id} style={{ ...btnGhostSmall, whiteSpace: "nowrap" }}>
+                  <Printer size={13} /> {downloadingId === o.id ? "Gerando..." : "Baixar PDF"}
+                </button>
+                {onCopyOrder && (
+                  <button onClick={() => { setCopyModalOrder(o); setCopyClientId(""); }} style={{ ...btnGhostSmall, whiteSpace: "nowrap" }}>
+                    <Copy size={13} /> Copiar
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
       </div>
+
+      {copyModalOrder && (
+        <div style={overlayStyle}>
+          <div style={{ ...modalStyle, maxWidth: 420 }}>
+            <div style={modalHeaderStyle}>
+              <div style={{ fontFamily: "Georgia, serif", fontSize: 16 }}>Copiar pedido para outro cliente</div>
+              <button onClick={() => setCopyModalOrder(null)} style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.graphite }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: 20 }}>
+              <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 14, lineHeight: 1.5 }}>
+                Cria um novo pedido com os mesmos itens de "{copyModalOrder.clientName}", atribuído ao cliente selecionado abaixo. O estoque é abatido normalmente, como em qualquer pedido novo — se faltar estoque para algum item, a quantidade copiada é ajustada.
+              </div>
+              <FieldLabel>Cliente de destino</FieldLabel>
+              <select value={copyClientId} onChange={(e) => setCopyClientId(e.target.value)} style={inputStyle}>
+                <option value="">Selecionar cliente...</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.buyerName}{c.cnpj ? ` — ${c.cnpj}` : ""}</option>)}
+              </select>
+              {clients.length === 0 && <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 6 }}>Nenhum cliente cadastrado.</div>}
+            </div>
+            <div style={modalFooterStyle}>
+              <button onClick={() => setCopyModalOrder(null)} style={btnGhostSmall}>Cancelar</button>
+              <button onClick={confirmCopy} disabled={!copyClientId} style={{ ...btnPrimary, opacity: copyClientId ? 1 : 0.5, cursor: copyClientId ? "pointer" : "not-allowed" }}>Copiar pedido</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
