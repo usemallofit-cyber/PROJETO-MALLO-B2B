@@ -347,6 +347,10 @@ export default function App() {
   // só libera "Finalizar pedido" quando o usuário reduzir a quantidade até
   // bater com o que está reservado (ou remover o item).
   function copyOrderToCart(order, client) {
+    if (!order || !order.items || !order.items.length) {
+      alert("Não foi possível copiar: este pedido não tem itens.");
+      return;
+    }
     if (cart.length) {
       const proceed = confirm("Você já tem itens no carrinho. Copiar este pedido vai substituir o que está lá agora pelos itens da cópia. Deseja continuar?");
       if (!proceed) return;
