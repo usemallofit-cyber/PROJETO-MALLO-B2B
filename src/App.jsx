@@ -755,6 +755,17 @@ function ProductCard({ p, showPrice, addToCart }) {
             );
           })}
         </div>
+        <div style={{ fontSize: 9.5, color: TOKENS.graphite, marginTop: 8, marginBottom: 3, letterSpacing: 0.3 }}>Estoque atual</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {SIZES.map((s) => {
+            const stockQty = variant.stock ? (variant.stock[s] || 0) : 0;
+            return (
+              <div key={s} style={{ flex: 1, textAlign: "center", fontSize: 11, fontWeight: 600, padding: "4px 0", borderRadius: 3, background: TOKENS.ivorySoft, color: stockQty ? TOKENS.graphite : "#B8AF9C", border: `1px solid ${TOKENS.line}` }}>
+                {stockQty}
+              </div>
+            );
+          })}
+        </div>
 
         {showPrice && <div style={{ marginTop: 12, fontFamily: "Georgia, serif", fontSize: 19, color: TOKENS.wine }}>R$ {p.price}</div>}
 
