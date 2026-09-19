@@ -1208,6 +1208,7 @@ function AdminCentralPanel({ users, setUsers, products, setProducts, orders, upd
     { id: "abc", label: "Curva ABC", icon: PieChart },
     { id: "estoque", label: "Estoque & Custos", icon: Archive },
     { id: "vendas-mes", label: "Vendas por Mês", icon: BarChart3 },
+    { id: "seguranca", label: "Segurança", icon: Lock },
   ];
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 24px 80px" }}>
@@ -1224,6 +1225,7 @@ function AdminCentralPanel({ users, setUsers, products, setProducts, orders, upd
           );
         })}
       </div>
+      {tab === "seguranca" && <AdminCentralSecurity users={users} setUsers={setUsers} />}
       {tab === "funcionarios" && <ClientesAdmin users={users} setUsers={setUsers} role="admin" title="Login de Funcionários" />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "ranking" && <RankingAdmin products={products} orders={orders} />}
@@ -1363,6 +1365,42 @@ function VendasMesAdmin({ orders }) {
           </BarChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  );
+}
+
+function AdminCentralSecurity({ users, setUsers }) {
+  const [current, setCurrent] = useState("");
+  const [next1, setNext1] = useState("");
+  const [next2, setNext2] = useState("");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  function save() {
+    setError(""); setSaved(false);
+    const realPassword = users.admincentral?.password || "";
+    if (current.trim() !== realPassword) { setError("Senha atual incorreta."); return; }
+    if (!next1.trim() || next1.length < 4) { setError("A nova senha precisa ter pelo menos 4 caracteres."); return; }
+    if (next1 !== next2) { setError("As duas senhas novas não coincidem."); return; }
+    setUsers({ ...users, admincentral: { ...users.admincentral, password: next1.trim() } });
+    setCurrent(""); setNext1(""); setNext2("");
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 420 }}>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 17, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}><Lock size={16} color={TOKENS.wine} /> Alterar senha do Admin Central</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Essa é a senha de login usada pelo Admin Central para entrar no sistema.</div>
+      <FieldLabel>Senha atual</FieldLabel>
+      <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} style={inputStyle} placeholder="Digite a senha atual" />
+      <FieldLabel>Nova senha</FieldLabel>
+      <input type="password" value={next1} onChange={(e) => setNext1(e.target.value)} style={inputStyle} placeholder="Digite a nova senha" />
+      <FieldLabel>Confirmar nova senha</FieldLabel>
+      <input type="password" value={next2} onChange={(e) => setNext2(e.target.value)} style={inputStyle} placeholder="Digite a nova senha de novo" />
+      {error && <div style={{ fontSize: 12, color: "#A5453F", marginTop: 10 }}>{error}</div>}
+      <button onClick={save} style={{ ...btnPrimary, marginTop: 16 }}><Check size={15} /> Salvar nova senha</button>
+      {saved && <span style={{ marginLeft: 10, fontSize: 12, color: TOKENS.ok }}>Senha atualizada!</span>}
     </div>
   );
 }
