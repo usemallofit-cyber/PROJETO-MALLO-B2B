@@ -126,7 +126,10 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
   for (const c of items) {
     if (y > 760) { doc.addPage(); y = 46; }
     if (c.image) {
-      try { doc.addImage(c.image, "JPEG", marginX, y, 46, 58); } catch (e) { /* segue sem a foto */ }
+      try {
+        const img = await new Promise((res, rej) => { const im = new window.Image(); im.onload = () => res(im); im.onerror = rej; im.src = c.image; });
+        doc.addImage(img, "JPEG", marginX, y, 46, 58);
+      } catch (e) { console.error("PDF: não foi possível carregar a foto do item", c.model, e); }
     }
     doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(23, 22, 26);
     doc.text(`${c.qty}x ${c.model}`, marginX + 58, y + 16);
