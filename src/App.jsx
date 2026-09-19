@@ -1621,16 +1621,18 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
   // dessa cor/tamanho — peças já vendidas em algum pedido nunca são tocadas.
   function save(p) {
     const exists = products.some((x) => x.id === p.id);
-    const originalVariants = editing?.variants || [];
     const newStockItems = [];
     const removedIds = [];
     let seqCursor = p.nextItemSeq || 1;
     (p.variants || []).forEach((v) => {
-      const orig = originalVariants.find((ov) => ov.id === v.id);
       SIZES.forEach((s) => {
-        const oldQty = orig?.stock?.[s] || 0;
+        // Compara com quantas peças JÁ estão rastreadas (não vendidas) para
+        // esta cor/tamanho — não com o que estava na tela antes de abrir a
+        // edição. Isso completa automaticamente estoque antigo que nunca
+        // tinha gerado peça (lançado antes desta função existir).
+        const tracked = (stockItems || []).filter((si) => si.productId === p.id && si.variantId === v.id && si.size === s && !si.orderId);
         const newQty = v.stock?.[s] || 0;
-        const delta = newQty - oldQty;
+        const delta = newQty - tracked.length;
         if (delta > 0) {
           for (let i = 0; i < delta; i++) {
             newStockItems.push({
@@ -1640,8 +1642,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
             seqCursor++;
           }
         } else if (delta < 0) {
-          const candidates = (stockItems || []).filter((si) => si.productId === p.id && si.variantId === v.id && si.size === s && !si.orderId);
-          removedIds.push(...candidates.slice(0, -delta).map((si) => si.id));
+          removedIds.push(...tracked.slice(0, -delta).map((si) => si.id));
         }
       });
     });
