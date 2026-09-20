@@ -302,10 +302,10 @@ function computeABC(orders) {
   });
 }
 
-const SEED_USERS = {
-  admincentral: { password: "central123", name: "Admin Central", role: "admincentral", access: "admin" },
-  admin: { password: "admin123", name: "Administrador", role: "admin", access: "admin" },
-};
+// Contas cujo e-mail de login (Supabase Auth) não segue o padrão
+// usuario@mallo.internal — hoje só o admincentral, que foi criado com um
+// e-mail próprio. Novas contas (via "Gerar login") sempre seguem o padrão.
+const AUTH_EMAIL_OVERRIDES = { admincentral: "rep.mauricio@hotmail.com" };
 
 const SEED_PRODUCTS = [
   {
@@ -339,7 +339,7 @@ const CLIENT_FIELDS = [
 
 export default function App() {
   const [booted, setBooted] = useState(false);
-  const [users, setUsers] = useState(SEED_USERS);
+  const [users, setUsers] = useState({});
   const [products, setProducts] = useState([]);
   const [banners, setBanners] = useState([]);
   const [settings, setSettings] = useState({ orderEmail: "", orderWhatsapp: "" });
@@ -352,24 +352,27 @@ export default function App() {
   const [cartOpen, setCartOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      const [u, p, b, s, cl, ord, si] = await Promise.all([
-        storageGet(STORE_KEYS.users, true), storageGet(STORE_KEYS.products, true),
-        storageGet(STORE_KEYS.banners, true), storageGet(STORE_KEYS.settings, true),
-        storageGet(STORE_KEYS.clients, true), storageGet(STORE_KEYS.orders, true),
-        storageGet(STORE_KEYS.stockItems, true),
-      ]);
-      const finalUsers = u || SEED_USERS;
-      const finalProducts = p || SEED_PRODUCTS;
-      if (!u) await storageSet(STORE_KEYS.users, finalUsers, true);
-      if (!p) await storageSet(STORE_KEYS.products, finalProducts, true);
-      setUsers(finalUsers); setProducts(finalProducts); setBanners(b || []);
-      setSettings(s || { orderEmail: "", orderWhatsapp: "" });
-      setClients(cl || []); setOrders(ord || []); setStockItems(si || []);
-      setBooted(true);
-    })();
-  }, []);
+  // Não busca mais nada do banco aqui: a leitura agora exige login de
+  // verdade (Supabase Auth), então os dados só são carregados depois que o
+  // login é confirmado (ver loadAppData / handleLogin).
+  useEffect(() => { setBooted(true); }, []);
+
+  async function loadAppData() {
+    const [u, p, b, s, cl, ord, si] = await Promise.all([
+      storageGet(STORE_KEYS.users, true), storageGet(STORE_KEYS.products, true),
+      storageGet(STORE_KEYS.banners, true), storageGet(STORE_KEYS.settings, true),
+      storageGet(STORE_KEYS.clients, true), storageGet(STORE_KEYS.orders, true),
+      storageGet(STORE_KEYS.stockItems, true),
+    ]);
+    const finalUsers = u || {};
+    const finalProducts = p || SEED_PRODUCTS;
+    if (!u) await storageSet(STORE_KEYS.users, finalUsers, true);
+    if (!p) await storageSet(STORE_KEYS.products, finalProducts, true);
+    setUsers(finalUsers); setProducts(finalProducts); setBanners(b || []);
+    setSettings(s || { orderEmail: "", orderWhatsapp: "" });
+    setClients(cl || []); setOrders(ord || []); setStockItems(si || []);
+    return finalUsers;
+  }
 
   const persistUsers = useCallback(async (next) => { setUsers(next); await storageSet(STORE_KEYS.users, next, true); }, []);
   const persistProducts = useCallback(async (next) => { setProducts(next); await storageSet(STORE_KEYS.products, next, true); }, []);
@@ -471,7 +474,8 @@ export default function App() {
   }
 
   async function handleLogin(username) {
-    const u = { username, ...users[username] };
+    const finalUsers = await loadAppData();
+    const u = { username, ...finalUsers[username] };
     setSession(u);
     setSelectedClient(null);
     const savedCart = await storageGet(`cart_${username}`, false);
@@ -579,7 +583,7 @@ export default function App() {
     return <div style={{ background: TOKENS.ink, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: TOKENS.sand, fontFamily: "system-ui" }}>Carregando catálogo…</div>;
   }
   if (!session) {
-    return <LoginScreen users={users} onLogin={handleLogin} />;
+    return <LoginScreen onLogin={handleLogin} />;
   }
 
   const showPrice = session.role === "admin" || session.role === "admincentral" || session.role === "representante" || session.access === "atacado";
@@ -617,55 +621,36 @@ export default function App() {
 }
 
 /* ---------------- LOGIN ---------------- */
-function LoginScreen({ users, onLogin }) {
+function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState(() => localStorage.getItem("mallo_saved_user") || "");
-  const [password, setPassword] = useState(() => localStorage.getItem("mallo_saved_pass") || "");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const isSecureLogin = !!users[username.trim().toLowerCase()]?.authEmail;
-
   // Limpa qualquer senha que tenha ficado salva em texto puro no navegador
-  // antes desta correção, para contas que agora usam login seguro.
-  useEffect(() => {
-    if (isSecureLogin && localStorage.getItem("mallo_saved_pass")) {
-      localStorage.removeItem("mallo_saved_pass");
-      setPassword("");
-    }
-  }, [isSecureLogin]);
+  // de uma versão anterior do app.
+  useEffect(() => { localStorage.removeItem("mallo_saved_pass"); }, []);
 
   function saveLogin() {
     localStorage.setItem("mallo_saved_user", username);
-    if (isSecureLogin) {
-      // Login com senha criptografada (Supabase Auth) — não guarda a senha
-      // em texto puro no navegador, só o nome de usuário, por segurança.
-      localStorage.removeItem("mallo_saved_pass");
-    } else {
-      localStorage.setItem("mallo_saved_pass", password);
-    }
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   }
 
-  // Contas com "authEmail" cadastrado usam o login de verdade do Supabase
-  // (senha criptografada, sessão segura) em vez da checagem antiga em texto
-  // puro. Isso está sendo migrado conta por conta — o resto ainda usa o
-  // sistema antigo até a migração completa.
+  // Todo login passa pelo Supabase Auth de verdade (senha criptografada).
+  // O e-mail usado por baixo dos panos é calculado a partir do nome de
+  // usuário digitado (usuario@mallo.internal) — não precisa ler o banco
+  // antes de autenticar, o que é o que permite travar a leitura também.
   async function submit() {
     const key = username.trim().toLowerCase();
-    const u = users[key];
-    if (!u) { setError("Login ou senha inválidos."); return; }
-    if (u.authEmail) {
-      setLoading(true);
-      const { error: authError } = await supabase.auth.signInWithPassword({ email: u.authEmail, password });
-      setLoading(false);
-      if (authError) { setError("Login ou senha inválidos."); return; }
-      setError(""); onLogin(key);
-      return;
-    }
-    if (u.password !== password) { setError("Login ou senha inválidos."); return; }
+    if (!key || !password) { setError("Login ou senha inválidos."); return; }
+    const email = AUTH_EMAIL_OVERRIDES[key] || `${key}@mallo.internal`;
+    setLoading(true);
+    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (authError) { setError("Login ou senha inválidos."); return; }
     setError(""); onLogin(key);
   }
   function onKeyDown(e) { if (e.key === "Enter") submit(); }
@@ -694,9 +679,9 @@ function LoginScreen({ users, onLogin }) {
           {error && <div style={{ color: "#D98080", fontSize: 12.5, marginTop: 8 }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
             <button onClick={submit} disabled={loading} style={{ flex: 1, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: loading ? "default" : "pointer", opacity: loading ? 0.7 : 1 }}>{loading ? "Entrando..." : "Entrar"}</button>
-            <button onClick={saveLogin} title={isSecureLogin ? "Salvar apenas o login (a senha não é guardada, por segurança)" : "Salvar este login neste navegador"} style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
+            <button onClick={saveLogin} title="Salvar apenas o nome de usuário (a senha nunca é guardada, por segurança)" style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
           </div>
-          {isSecureLogin && <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 10, lineHeight: 1.4 }}>Este login usa senha criptografada — "Salvar login" guarda só o usuário, não a senha.</div>}
+          <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 10, lineHeight: 1.4 }}>Login com senha criptografada — "Salvar login" guarda só o usuário, nunca a senha.</div>
         </div>
         <div style={{ textAlign: "center", color: TOKENS.graphite, fontSize: 11.5, marginTop: 16 }}>Acesso central, administrativo, de representantes e de clientes atacado — solicite ao seu representante.</div>
       </div>
@@ -2095,21 +2080,40 @@ function ClientesAdmin({ users, setUsers, role, title }) {
   const [access, setAccess] = useState("atacado");
   const [lastGenerated, setLastGenerated] = useState(null);
   const [copiedKey, setCopiedKey] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [revokingId, setRevokingId] = useState("");
 
-  function generate() {
+  // Cria o login de verdade (Supabase Auth) através de uma função no
+  // servidor — o app nunca manuseia a criação de contas diretamente, já que
+  // isso exige a chave de administrador do Supabase, que nunca fica exposta
+  // no navegador.
+  async function generate() {
     if (!name.trim()) return;
+    setCreateError("");
     const base = name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, ".").replace(/(^\.|\.$)/g, "");
     let username = base || uid(role === "representante" ? "rep_" : role === "admin" ? "func_" : "cli_");
     let n = 1;
     while (users[username]) { username = `${base}${n}`; n++; }
-    const password = genPass();
     const finalAccess = role === "representante" ? "atacado" : access;
-    const next = { ...users, [username]: { password, name: name.trim(), role, access: finalAccess } };
-    setUsers(next);
-    setLastGenerated({ username, password, name: name.trim(), access: finalAccess });
+    setCreating(true);
+    const { data, error } = await supabase.functions.invoke("staff-accounts", {
+      body: { action: "create", username, name: name.trim(), role, access: finalAccess },
+    });
+    setCreating(false);
+    if (error || data?.error) { setCreateError(data?.error || "Não foi possível criar o login agora. Tente novamente."); return; }
+    setUsers({ ...users, [data.username]: { name: data.name, role, access: data.access, authEmail: `${data.username}@mallo.internal` } });
+    setLastGenerated({ username: data.username, password: data.password, name: data.name, access: data.access });
     setName("");
   }
-  function revoke(username) { if (confirm(`Revogar acesso de "${username}"?`)) { const n = { ...users }; delete n[username]; setUsers(n); } }
+  async function revoke(username) {
+    if (!confirm(`Revogar acesso de "${username}"?`)) return;
+    setRevokingId(username);
+    const { data, error } = await supabase.functions.invoke("staff-accounts", { body: { action: "revoke", username } });
+    setRevokingId("");
+    if (error || data?.error) { alert(data?.error || "Não foi possível revogar agora. Tente novamente."); return; }
+    const n = { ...users }; delete n[username]; setUsers(n);
+  }
   function copy(text, key) { navigator.clipboard?.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(""), 1200); }
 
   const entries = Object.entries(users).filter(([, u]) => u.role === role);
@@ -2132,7 +2136,8 @@ function ClientesAdmin({ users, setUsers, role, title }) {
         )}
         {role === "representante" && <div style={{ fontSize: 11, color: TOKENS.graphite, margin: "6px 0 14px" }}>Representantes sempre veem a vitrine com preços, para montar pedidos junto aos clientes.</div>}
         {role === "admin" && <div style={{ fontSize: 11, color: TOKENS.graphite, margin: "6px 0 14px" }}>Funcionários acessam o Painel ADM normalmente, mas sem preço de custo nem os relatórios gerenciais (isso fica só no Painel Central).</div>}
-        <button onClick={generate} style={{ ...btnPrimary, width: "100%", justifyContent: "center" }}><Plus size={15} /> Gerar login</button>
+        <button onClick={generate} disabled={creating} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: creating ? 0.7 : 1 }}><Plus size={15} /> {creating ? "Gerando..." : "Gerar login"}</button>
+        {createError && <div style={{ fontSize: 11.5, color: "#A5453F", marginTop: 8 }}>{createError}</div>}
 
         {lastGenerated && (
           <div style={{ marginTop: 16, background: TOKENS.ivorySoft, border: `1px solid ${TOKENS.sand}`, borderRadius: 4, padding: 12 }}>
@@ -2151,9 +2156,9 @@ function ClientesAdmin({ users, setUsers, role, title }) {
             <div key={username} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{u.name}</div>
-                <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>login: {username} · senha: {u.password}{role === "client" ? ` · ${u.access === "atacado" ? "vê preços" : "somente fotos"}` : ""}</div>
+                <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>login: {username}{role === "client" ? ` · ${u.access === "atacado" ? "vê preços" : "somente fotos"}` : ""}</div>
               </div>
-              <button onClick={() => revoke(username)} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> Revogar</button>
+              <button onClick={() => revoke(username)} disabled={revokingId === username} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> {revokingId === username ? "Revogando..." : "Revogar"}</button>
             </div>
           ))}
         </div>
