@@ -268,13 +268,13 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
 // usuários, pedidos, etc.) como uma linha na tabela app_data, com o valor em JSONB.
 // Isso mantém todo o resto do código (App, componentes, lógica) exatamente igual.
 async function storageGet(key) {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const { data, error } = await supabase.from("app_data").select("value").eq("key", key).maybeSingle();
       if (error) throw error;
       return data ? data.value : null;
     } catch (e) {
-      if (attempt === 0) { await new Promise((r) => setTimeout(r, 400)); continue; }
+      if (attempt < 2) { await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); continue; }
       console.error("Erro lendo do Supabase:", key, e.message || e);
       return null;
     }
@@ -421,7 +421,6 @@ export default function App() {
       storageGet(STORE_KEYS.stockItems, true),
     ]);
     const finalUsers = u || {};
-    if (!u) await storageSet(STORE_KEYS.users, finalUsers, true);
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
@@ -542,7 +541,20 @@ export default function App() {
   }
 
   async function handleLogin(username) {
-    const finalUsers = await loadAppData();
+    let finalUsers;
+    try {
+      finalUsers = await loadAppData();
+    } catch (e) {
+      console.error("Erro ao carregar dados após login:", e);
+      alert("Login feito, mas não consegui carregar os dados do sistema agora. Tente recarregar a página e entrar de novo.");
+      await supabase.auth.signOut();
+      return;
+    }
+    if (!finalUsers[username]) {
+      alert("Login feito, mas não consegui confirmar seu papel de acesso agora (provavelmente uma falha momentânea de conexão). Recarregue a página e tente entrar de novo.");
+      await supabase.auth.signOut();
+      return;
+    }
     const u = { username, ...finalUsers[username] };
     setSession(u);
     setSelectedClient(null);
