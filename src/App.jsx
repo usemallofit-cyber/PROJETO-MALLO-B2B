@@ -625,9 +625,26 @@ function LoginScreen({ users, onLogin }) {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const isSecureLogin = !!users[username.trim().toLowerCase()]?.authEmail;
+
+  // Limpa qualquer senha que tenha ficado salva em texto puro no navegador
+  // antes desta correção, para contas que agora usam login seguro.
+  useEffect(() => {
+    if (isSecureLogin && localStorage.getItem("mallo_saved_pass")) {
+      localStorage.removeItem("mallo_saved_pass");
+      setPassword("");
+    }
+  }, [isSecureLogin]);
+
   function saveLogin() {
     localStorage.setItem("mallo_saved_user", username);
-    localStorage.setItem("mallo_saved_pass", password);
+    if (isSecureLogin) {
+      // Login com senha criptografada (Supabase Auth) — não guarda a senha
+      // em texto puro no navegador, só o nome de usuário, por segurança.
+      localStorage.removeItem("mallo_saved_pass");
+    } else {
+      localStorage.setItem("mallo_saved_pass", password);
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   }
@@ -677,8 +694,9 @@ function LoginScreen({ users, onLogin }) {
           {error && <div style={{ color: "#D98080", fontSize: 12.5, marginTop: 8 }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
             <button onClick={submit} disabled={loading} style={{ flex: 1, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: loading ? "default" : "pointer", opacity: loading ? 0.7 : 1 }}>{loading ? "Entrando..." : "Entrar"}</button>
-            <button onClick={saveLogin} title="Salvar este login neste navegador" style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
+            <button onClick={saveLogin} title={isSecureLogin ? "Salvar apenas o login (a senha não é guardada, por segurança)" : "Salvar este login neste navegador"} style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
           </div>
+          {isSecureLogin && <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 10, lineHeight: 1.4 }}>Este login usa senha criptografada — "Salvar login" guarda só o usuário, não a senha.</div>}
         </div>
         <div style={{ textAlign: "center", color: TOKENS.graphite, fontSize: 11.5, marginTop: 16 }}>Acesso central, administrativo, de representantes e de clientes atacado — solicite ao seu representante.</div>
       </div>
