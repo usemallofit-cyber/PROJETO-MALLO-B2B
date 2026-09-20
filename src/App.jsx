@@ -477,7 +477,10 @@ export default function App() {
     const savedCart = await storageGet(`cart_${username}`, false);
     setCart(savedCart || []);
   }
-  function handleLogout() { setSession(null); setScreen("catalog"); setCart([]); setCartOpen(false); setSelectedClient(null); }
+  function handleLogout() {
+    if (session?.authEmail) supabase.auth.signOut();
+    setSession(null); setScreen("catalog"); setCart([]); setCartOpen(false); setSelectedClient(null);
+  }
 
   const persistCart = useCallback(async (next) => {
     setCart(next);
@@ -620,6 +623,7 @@ function LoginScreen({ users, onLogin }) {
   const [error, setError] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   function saveLogin() {
     localStorage.setItem("mallo_saved_user", username);
@@ -628,10 +632,23 @@ function LoginScreen({ users, onLogin }) {
     setTimeout(() => setSaved(false), 1500);
   }
 
-  function submit() {
+  // Contas com "authEmail" cadastrado usam o login de verdade do Supabase
+  // (senha criptografada, sessão segura) em vez da checagem antiga em texto
+  // puro. Isso está sendo migrado conta por conta — o resto ainda usa o
+  // sistema antigo até a migração completa.
+  async function submit() {
     const key = username.trim().toLowerCase();
     const u = users[key];
-    if (!u || u.password !== password) { setError("Login ou senha inválidos."); return; }
+    if (!u) { setError("Login ou senha inválidos."); return; }
+    if (u.authEmail) {
+      setLoading(true);
+      const { error: authError } = await supabase.auth.signInWithPassword({ email: u.authEmail, password });
+      setLoading(false);
+      if (authError) { setError("Login ou senha inválidos."); return; }
+      setError(""); onLogin(key);
+      return;
+    }
+    if (u.password !== password) { setError("Login ou senha inválidos."); return; }
     setError(""); onLogin(key);
   }
   function onKeyDown(e) { if (e.key === "Enter") submit(); }
@@ -659,7 +676,7 @@ function LoginScreen({ users, onLogin }) {
           </div>
           {error && <div style={{ color: "#D98080", fontSize: 12.5, marginTop: 8 }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-            <button onClick={submit} style={{ flex: 1, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: "pointer" }}>Entrar</button>
+            <button onClick={submit} disabled={loading} style={{ flex: 1, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: loading ? "default" : "pointer", opacity: loading ? 0.7 : 1 }}>{loading ? "Entrando..." : "Entrar"}</button>
             <button onClick={saveLogin} title="Salvar este login neste navegador" style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
           </div>
         </div>
@@ -1375,14 +1392,22 @@ function AdminCentralSecurity({ users, setUsers }) {
   const [next2, setNext2] = useState("");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const authEmail = users.admincentral?.authEmail;
 
-  function save() {
+  // Confirma a senha atual reautenticando de verdade no Supabase (não é só
+  // uma comparação de texto), e só então troca pela nova senha.
+  async function save() {
     setError(""); setSaved(false);
-    const realPassword = users.admincentral?.password || "";
-    if (current.trim() !== realPassword) { setError("Senha atual incorreta."); return; }
-    if (!next1.trim() || next1.length < 4) { setError("A nova senha precisa ter pelo menos 4 caracteres."); return; }
+    if (!authEmail) { setError("Este login ainda não foi migrado para o sistema de senha seguro."); return; }
+    if (!next1.trim() || next1.length < 6) { setError("A nova senha precisa ter pelo menos 6 caracteres."); return; }
     if (next1 !== next2) { setError("As duas senhas novas não coincidem."); return; }
-    setUsers({ ...users, admincentral: { ...users.admincentral, password: next1.trim() } });
+    setLoading(true);
+    const { error: authCheck } = await supabase.auth.signInWithPassword({ email: authEmail, password: current });
+    if (authCheck) { setLoading(false); setError("Senha atual incorreta."); return; }
+    const { error: updateError } = await supabase.auth.updateUser({ password: next1.trim() });
+    setLoading(false);
+    if (updateError) { setError("Não foi possível trocar a senha agora. Tente novamente."); return; }
     setCurrent(""); setNext1(""); setNext2("");
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -1399,7 +1424,7 @@ function AdminCentralSecurity({ users, setUsers }) {
       <FieldLabel>Confirmar nova senha</FieldLabel>
       <input type="password" value={next2} onChange={(e) => setNext2(e.target.value)} style={inputStyle} placeholder="Digite a nova senha de novo" />
       {error && <div style={{ fontSize: 12, color: "#A5453F", marginTop: 10 }}>{error}</div>}
-      <button onClick={save} style={{ ...btnPrimary, marginTop: 16 }}><Check size={15} /> Salvar nova senha</button>
+      <button onClick={save} disabled={loading} style={{ ...btnPrimary, marginTop: 16, opacity: loading ? 0.7 : 1 }}><Check size={15} /> {loading ? "Salvando..." : "Salvar nova senha"}</button>
       {saved && <span style={{ marginLeft: 10, fontSize: 12, color: TOKENS.ok }}>Senha atualizada!</span>}
     </div>
   );
