@@ -25,6 +25,37 @@ const STORE_KEYS = {
 
 function uid(prefix = "") { return prefix + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
 function genPass() { const c = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = ""; for (let i = 0; i < 6; i++) s += c[Math.floor(Math.random() * c.length)]; return s; }
+
+// Converte entre o formato usado no app (camelCase) e o formato das tabelas
+// reais do Supabase (snake_case), agora que produtos/banners/configurações
+// deixaram de ser um bloco único e viraram tabelas de verdade.
+function productToRow(p) {
+  return { id: p.id, model: p.model, sku: p.sku, category: p.category, description: p.description, price: p.price, cost_price: p.costPrice, variants: p.variants || [], next_item_seq: p.nextItemSeq || 1 };
+}
+function rowToProduct(r) {
+  return { id: r.id, model: r.model, sku: r.sku, category: r.category, description: r.description, price: r.price, costPrice: r.cost_price, variants: r.variants || [], nextItemSeq: r.next_item_seq || 1 };
+}
+function bannerToRow(b, i) { return { id: b.id, url: b.url, sort_order: i }; }
+function rowToBanner(r) { return { id: r.id, url: r.url }; }
+
+// Sincroniza uma tabela inteira com a lista de linhas desejada: grava
+// (upsert) todas as linhas da lista e apaga do banco qualquer linha que não
+// esteja mais nela. Seguro para tabelas onde quem escreve sempre enxerga a
+// tabela inteira (produtos, banners, configurações) — não usar em tabelas
+// onde um papel só vê parte dos dados (ex.: clientes, pedidos), porque aí
+// apagaria linhas de outras pessoas por engano.
+async function syncTable(table, idField, rows) {
+  if (rows.length) {
+    const { error } = await supabase.from(table).upsert(rows);
+    if (error) throw error;
+  }
+  let del = supabase.from(table).delete();
+  del = rows.length
+    ? del.not(idField, "in", `(${rows.map((r) => `"${r[idField]}"`).join(",")})`)
+    : del.neq(idField, "__none__");
+  const { error: delError } = await del;
+  if (delError) throw delError;
+}
 function parseBRL(str) { const n = parseFloat(String(str || "0").replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; }
 function formatBRL(n) { return n.toFixed(2).replace(".", ","); }
 
@@ -377,26 +408,40 @@ export default function App() {
   useEffect(() => { setBooted(true); }, []);
 
   async function loadAppData() {
-    const [u, p, b, s, cl, ord, si] = await Promise.all([
-      storageGet(STORE_KEYS.users, true), storageGet(STORE_KEYS.products, true),
-      storageGet(STORE_KEYS.banners, true), storageGet(STORE_KEYS.settings, true),
+    const [u, pRows, bRows, sRow, cl, ord, si] = await Promise.all([
+      storageGet(STORE_KEYS.users, true),
+      supabase.from("products").select("*"),
+      supabase.from("banners").select("*").order("sort_order"),
+      supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
       storageGet(STORE_KEYS.clients, true), storageGet(STORE_KEYS.orders, true),
       storageGet(STORE_KEYS.stockItems, true),
     ]);
     const finalUsers = u || {};
-    const finalProducts = p || SEED_PRODUCTS;
     if (!u) await storageSet(STORE_KEYS.users, finalUsers, true);
-    if (!p) await storageSet(STORE_KEYS.products, finalProducts, true);
-    setUsers(finalUsers); setProducts(finalProducts); setBanners(b || []);
-    setSettings(s || { orderEmail: "", orderWhatsapp: "" });
+    setUsers(finalUsers);
+    setProducts((pRows.data || []).map(rowToProduct));
+    setBanners((bRows.data || []).map(rowToBanner));
+    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "" } : { orderEmail: "", orderWhatsapp: "" });
     setClients(cl || []); setOrders(ord || []); setStockItems(si || []);
     return finalUsers;
   }
 
   const persistUsers = useCallback(async (next) => { setUsers(next); await storageSet(STORE_KEYS.users, next, true); }, []);
-  const persistProducts = useCallback(async (next) => { setProducts(next); await storageSet(STORE_KEYS.products, next, true); }, []);
-  const persistBanners = useCallback(async (next) => { setBanners(next); await storageSet(STORE_KEYS.banners, next, true); }, []);
-  const persistSettings = useCallback(async (next) => { setSettings(next); await storageSet(STORE_KEYS.settings, next, true); }, []);
+  const persistProducts = useCallback(async (next) => {
+    setProducts(next);
+    try { await syncTable("products", "id", next.map(productToRow)); } catch (e) { console.error("Erro ao salvar produtos:", e); }
+  }, []);
+  const persistBanners = useCallback(async (next) => {
+    setBanners(next);
+    try { await syncTable("banners", "id", next.map((b, i) => bannerToRow(b, i))); } catch (e) { console.error("Erro ao salvar banners:", e); }
+  }, []);
+  const persistSettings = useCallback(async (next) => {
+    setSettings(next);
+    try {
+      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp });
+      if (error) throw error;
+    } catch (e) { console.error("Erro ao salvar configurações:", e); }
+  }, []);
   const persistClients = useCallback(async (next) => { setClients(next); await storageSet(STORE_KEYS.clients, next, true); }, []);
   const persistOrders = useCallback(async (next) => { setOrders(next); await storageSet(STORE_KEYS.orders, next, true); }, []);
   const persistStockItems = useCallback(async (next) => { setStockItems(next); await storageSet(STORE_KEYS.stockItems, next, true); }, []);
