@@ -307,6 +307,25 @@ function computeABC(orders) {
 // e-mail próprio. Novas contas (via "Gerar login") sempre seguem o padrão.
 const AUTH_EMAIL_OVERRIDES = { admincentral: "rep.mauricio@hotmail.com" };
 
+// Cloudflare Turnstile (captcha) na tela de login, para dificultar tentativas
+// automatizadas de adivinhar senha. Site Key é pública, sem problema ficar
+// aqui no código.
+const TURNSTILE_SITE_KEY = "0x4AAAAAAE9XTMAIWtvzNTtL";
+let _turnstileLoading = null;
+function loadTurnstile() {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (_turnstileLoading) return _turnstileLoading;
+  _turnstileLoading = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+    script.async = true; script.defer = true;
+    script.onload = () => resolve(window.turnstile);
+    script.onerror = () => reject(new Error("Falha ao carregar o captcha"));
+    document.head.appendChild(script);
+  });
+  return _turnstileLoading;
+}
+
 const SEED_PRODUCTS = [
   {
     id: uid("p_"), model: "Vestido Aurora", category: "Macaquinhos", description: "Vestido midi em viscose fluida, decote V e amarração no cós.", price: "189,90", costPrice: "89,00",
@@ -628,10 +647,28 @@ function LoginScreen({ onLogin }) {
   const [showPass, setShowPass] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const captchaRef = useRef(null);
+  const widgetIdRef = useRef(null);
 
   // Limpa qualquer senha que tenha ficado salva em texto puro no navegador
   // de uma versão anterior do app.
   useEffect(() => { localStorage.removeItem("mallo_saved_pass"); }, []);
+
+  // Carrega e desenha o captcha (Cloudflare Turnstile) assim que a tela abre.
+  useEffect(() => {
+    let cancelled = false;
+    loadTurnstile().then((turnstile) => {
+      if (cancelled || !captchaRef.current || widgetIdRef.current) return;
+      widgetIdRef.current = turnstile.render(captchaRef.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        callback: (token) => setCaptchaToken(token),
+        "expired-callback": () => setCaptchaToken(""),
+        "error-callback": () => setCaptchaToken(""),
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   function saveLogin() {
     localStorage.setItem("mallo_saved_user", username);
@@ -643,13 +680,18 @@ function LoginScreen({ onLogin }) {
   // O e-mail usado por baixo dos panos é calculado a partir do nome de
   // usuário digitado (usuario@mallo.internal) — não precisa ler o banco
   // antes de autenticar, o que é o que permite travar a leitura também.
+  // O token do captcha (resolvido sem a pessoa precisar fazer nada, na
+  // maioria dos casos) é enviado junto e validado pelo próprio Supabase.
   async function submit() {
     const key = username.trim().toLowerCase();
     if (!key || !password) { setError("Login ou senha inválidos."); return; }
+    if (!captchaToken) { setError("Aguarde a verificação de segurança terminar e tente de novo."); return; }
     const email = AUTH_EMAIL_OVERRIDES[key] || `${key}@mallo.internal`;
     setLoading(true);
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    const { error: authError } = await supabase.auth.signInWithPassword({ email, password, options: { captchaToken } });
     setLoading(false);
+    if (window.turnstile && widgetIdRef.current) window.turnstile.reset(widgetIdRef.current);
+    setCaptchaToken("");
     if (authError) { setError("Login ou senha inválidos."); return; }
     setError(""); onLogin(key);
   }
@@ -677,6 +719,7 @@ function LoginScreen({ onLogin }) {
             <button onClick={() => setShowPass((s) => !s)} style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.graphite }}><Eye size={15} /></button>
           </div>
           {error && <div style={{ color: "#D98080", fontSize: 12.5, marginTop: 8 }}>{error}</div>}
+          <div ref={captchaRef} style={{ marginTop: 12, display: "flex", justifyContent: "center" }} />
           <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
             <button onClick={submit} disabled={loading} style={{ flex: 1, background: TOKENS.wine, color: TOKENS.ivory, border: "none", borderRadius: 3, padding: "12px 0", fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", cursor: loading ? "default" : "pointer", opacity: loading ? 0.7 : 1 }}>{loading ? "Entrando..." : "Entrar"}</button>
             <button onClick={saveLogin} title="Salvar apenas o nome de usuário (a senha nunca é guardada, por segurança)" style={{ flex: 1, background: "transparent", color: saved ? TOKENS.sand : TOKENS.ivory, border: `1px solid ${TOKENS.sand}`, borderRadius: 3, padding: "12px 0", fontSize: 12, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>{saved ? "Salvo ✓" : "Salvar login"}</button>
