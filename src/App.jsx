@@ -268,13 +268,16 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
 // usuários, pedidos, etc.) como uma linha na tabela app_data, com o valor em JSONB.
 // Isso mantém todo o resto do código (App, componentes, lógica) exatamente igual.
 async function storageGet(key) {
-  try {
-    const { data, error } = await supabase.from("app_data").select("value").eq("key", key).maybeSingle();
-    if (error) throw error;
-    return data ? data.value : null;
-  } catch (e) {
-    console.error("Erro lendo do Supabase:", key, e.message || e);
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { data, error } = await supabase.from("app_data").select("value").eq("key", key).maybeSingle();
+      if (error) throw error;
+      return data ? data.value : null;
+    } catch (e) {
+      if (attempt === 0) { await new Promise((r) => setTimeout(r, 400)); continue; }
+      console.error("Erro lendo do Supabase:", key, e.message || e);
+      return null;
+    }
   }
 }
 async function storageSet(key, value) {
@@ -408,6 +411,7 @@ export default function App() {
   useEffect(() => { setBooted(true); }, []);
 
   async function loadAppData() {
+    await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
     const [u, pRows, bRows, sRow, cl, ord, si] = await Promise.all([
       storageGet(STORE_KEYS.users, true),
       supabase.from("products").select("*"),
