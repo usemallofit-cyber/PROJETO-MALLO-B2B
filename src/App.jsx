@@ -468,8 +468,8 @@ async function withRetry(fn) {
 
   async function loadAppData() {
     await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
-    const [u, pRows, bRows, sRow, clRows, ordRows, siRows] = await Promise.all([
-      storageGet(STORE_KEYS.users, true),
+    const [profRows, pRows, bRows, sRow, clRows, ordRows, siRows] = await Promise.all([
+      withRetry(() => supabase.from("profiles").select("*")),
       withRetry(() => supabase.from("products").select("*")),
       withRetry(() => supabase.from("banners").select("*").order("sort_order")),
       withRetry(() => supabase.from("settings").select("*").eq("id", 1).maybeSingle()),
@@ -477,7 +477,8 @@ async function withRetry(fn) {
       withRetry(() => supabase.from("orders").select("*")),
       withRetry(() => supabase.from("stock_items").select("*")),
     ]);
-    const finalUsers = u || {};
+    const finalUsers = {};
+    (profRows.data || []).forEach((p) => { finalUsers[p.username] = { name: p.name, role: p.role, access: p.access, authEmail: AUTH_EMAIL_OVERRIDES[p.username] || `${p.username}@mallo.internal` }; });
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
@@ -487,7 +488,11 @@ async function withRetry(fn) {
     return finalUsers;
   }
 
-  const persistUsers = useCallback(async (next) => { setUsers(next); await storageSet(STORE_KEYS.users, next, true); }, []);
+  // A gravação de verdade de contas (criar/revogar) já acontece na função
+  // segura do servidor (staff-accounts), que mexe direto nas tabelas
+  // profiles/auth. Isso aqui só atualiza a tela na hora, sem gravar nada —
+  // evitar escrever num lugar que ninguém mais lê.
+  const persistUsers = useCallback((next) => { setUsers(next); }, []);
   const persistProducts = useCallback(async (next) => {
     setProducts(next);
     try { await syncTable("products", "id", next.map(productToRow)); } catch (e) { console.error("Erro ao salvar produtos:", e); }
@@ -641,7 +646,7 @@ function rowToStockItem(r) {
     setCart(cartRow?.items || []);
   }
   function handleLogout() {
-    if (session?.authEmail) supabase.auth.signOut();
+    supabase.auth.signOut();
     setSession(null); setScreen("catalog"); setCart([]); setCartOpen(false); setSelectedClient(null);
   }
 
@@ -2302,6 +2307,14 @@ function ClientesAdmin({ users, setUsers, role, title }) {
     if (error || data?.error) { alert(data?.error || "Não foi possível revogar agora. Tente novamente."); return; }
     const n = { ...users }; delete n[username]; setUsers(n);
   }
+  async function resetPassword(username) {
+    if (!confirm(`Gerar uma nova senha para "${username}"? A senha antiga deixa de funcionar.`)) return;
+    setRevokingId(username);
+    const { data, error } = await supabase.functions.invoke("staff-accounts", { body: { action: "reset", username } });
+    setRevokingId("");
+    if (error || data?.error) { alert(data?.error || "Não foi possível redefinir a senha agora. Tente novamente."); return; }
+    setLastGenerated({ username: data.username, password: data.password, name: data.name, access: data.access });
+  }
   function copy(text, key) { navigator.clipboard?.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(""), 1200); }
 
   const entries = Object.entries(users).filter(([, u]) => u.role === role);
@@ -2346,7 +2359,10 @@ function ClientesAdmin({ users, setUsers, role, title }) {
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{u.name}</div>
                 <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>login: {username}{role === "client" ? ` · ${u.access === "atacado" ? "vê preços" : "somente fotos"}` : ""}</div>
               </div>
-              <button onClick={() => revoke(username)} disabled={revokingId === username} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> {revokingId === username ? "Revogando..." : "Revogar"}</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => resetPassword(username)} disabled={revokingId === username} style={btnGhostSmall}><Lock size={13} /> Redefinir senha</button>
+                <button onClick={() => revoke(username)} disabled={revokingId === username} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> {revokingId === username ? "Revogando..." : "Revogar"}</button>
+              </div>
             </div>
           ))}
         </div>
