@@ -410,13 +410,26 @@ export default function App() {
   // login é confirmado (ver loadAppData / handleLogin).
   useEffect(() => { setBooted(true); }, []);
 
+// Repete uma chamada ao Supabase até 3 vezes se ela vier com erro (cobre a
+// mesma corrida de sessão logo após o login que já tratamos em storageGet).
+async function withRetry(fn) {
+  let lastResult;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    lastResult = await fn();
+    if (!lastResult.error) return lastResult;
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+  }
+  console.error("Erro no Supabase após tentativas:", lastResult.error);
+  return lastResult;
+}
+
   async function loadAppData() {
     await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
     const [u, pRows, bRows, sRow, cl, ord, si] = await Promise.all([
       storageGet(STORE_KEYS.users, true),
-      supabase.from("products").select("*"),
-      supabase.from("banners").select("*").order("sort_order"),
-      supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
+      withRetry(() => supabase.from("products").select("*")),
+      withRetry(() => supabase.from("banners").select("*").order("sort_order")),
+      withRetry(() => supabase.from("settings").select("*").eq("id", 1).maybeSingle()),
       storageGet(STORE_KEYS.clients, true), storageGet(STORE_KEYS.orders, true),
       storageGet(STORE_KEYS.stockItems, true),
     ]);
