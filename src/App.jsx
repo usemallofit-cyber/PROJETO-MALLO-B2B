@@ -204,69 +204,70 @@ function loadJsBarcode() {
   return _jsBarcodeLoading;
 }
 
-// Gera um PDF com uma etiqueta por página, no tamanho comum de impressora
-// térmica de etiquetas (50 x 30mm), para UMA cor/variação, repetindo a
-// etiqueta de cada tamanho conforme a quantidade escolhida em qtyBySize
-// (ex.: {P:10, M:0, G:0, GG:6} gera 10 etiquetas de P e 6 de GG). Cada
-// etiqueta traz o modelo, a cor, o tamanho e um código de barras (Code128)
-// pronto para leitura com leitor/bip. O código combina SKU (ou nome do
-// modelo) + cor + tamanho, para ficar único por peça.
-async function buildStockLabelsPdfBlob(productModel, productSku, variant, qtyBySize) {
+// Todas as etiquetas saem numa grade de 3 colunas por folha A4, cada
+// etiqueta com 33 x 21mm e 0,2mm de distância entre as colunas — pronto
+// pra folha de etiqueta autoadesiva com 3 colunas. Sempre gerada nessa
+// mesma sequência (esquerda pra direita, cima pra baixo), independente de
+// qual tela pediu a etiqueta.
+const LABEL_W = 33, LABEL_H = 21, LABEL_GAP = 0.2, LABEL_COLS = 3, LABEL_MARGIN_X = 8, LABEL_MARGIN_Y = 8;
+
+function drawLabel(doc, x, y, model, color, size, code, barcodeDataUrl) {
+  doc.setFont("helvetica", "bold"); doc.setFontSize(6); doc.setTextColor(23, 22, 26);
+  doc.text(model || "", x + 1.5, y + 3.2, { maxWidth: LABEL_W - 3 });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(5.3); doc.setTextColor(90, 86, 76);
+  doc.text(`${color || ""} · ${size}`, x + 1.5, y + 6.3);
+  doc.addImage(barcodeDataUrl, "PNG", x + 1.5, y + 7.8, LABEL_W - 3, 7.5);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(4.4); doc.setTextColor(23, 22, 26);
+  doc.text(code, x + LABEL_W / 2, y + LABEL_H - 1.3, { align: "center" });
+}
+
+// Recebe uma lista de etiquetas já expandida — uma entrada por peça física
+// — no formato { model, color, size, code }, e desenha todas na grade.
+async function buildLabelsGridPdf(entries) {
+  if (!entries || !entries.length) return null;
   const jsPDF = await loadJsPDF();
   const JsBarcode = await loadJsBarcode();
-  const labels = [];
-  SIZES.forEach((s) => {
-    const n = Math.max(0, Math.floor(Number(qtyBySize?.[s]) || 0));
-    for (let i = 0; i < n; i++) labels.push(s);
-  });
-  if (!labels.length) return null;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const rowsPerPage = Math.floor((297 - 2 * LABEL_MARGIN_Y) / LABEL_H);
+  const perPage = rowsPerPage * LABEL_COLS;
 
-  const doc = new jsPDF({ unit: "mm", format: [50, 30] });
-  const baseCode = (productSku || productModel || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
-  const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  entries.forEach((e, i) => {
+    const posOnPage = i % perPage;
+    if (i > 0 && posOnPage === 0) doc.addPage();
+    const row = Math.floor(posOnPage / LABEL_COLS);
+    const col = posOnPage % LABEL_COLS;
+    const x = LABEL_MARGIN_X + col * (LABEL_W + LABEL_GAP);
+    const y = LABEL_MARGIN_Y + row * LABEL_H;
 
-  labels.forEach((s, i) => {
-    if (i > 0) doc.addPage([50, 30]);
-    const code = `${baseCode}-${colorCode}-${s}`;
     const canvas = document.createElement("canvas");
-    JsBarcode(canvas, code, { format: "CODE128", width: 1.6, height: 34, displayValue: false, margin: 0 });
-    const barcodeDataUrl = canvas.toDataURL("image/png");
-
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-    doc.text(productModel || "", 3, 5, { maxWidth: 44 });
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7);
-    doc.text(`${variant.color || ""} · Tam ${s}`, 3, 9.5);
-    doc.addImage(barcodeDataUrl, "PNG", 3, 12, 44, 11);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(6);
-    doc.text(code, 25, 26, { align: "center" });
+    JsBarcode(canvas, e.code, { format: "CODE128", width: 1, height: 30, displayValue: false, margin: 0 });
+    drawLabel(doc, x, y, e.model, e.color, e.size, e.code, canvas.toDataURL("image/png"));
   });
   return doc.output("blob");
 }
 
-// Gera um PDF com uma etiqueta por página a partir de uma lista de peças
-// específicas (usado pela Listagem de itens — imprimir uma peça ou várias
-// selecionadas). Cada entrada precisa de { model, color, size, code }, onde
-// code já vem pronto (ex.: "MC01.7") — o código de barras usa exatamente
-// esse texto, dando rastreabilidade única por peça.
-async function buildItemLabelsPdfBlob(entries) {
-  if (!entries || !entries.length) return null;
-  const jsPDF = await loadJsPDF();
-  const JsBarcode = await loadJsBarcode();
-  const doc = new jsPDF({ unit: "mm", format: [50, 30] });
-  entries.forEach((e, i) => {
-    if (i > 0) doc.addPage([50, 30]);
-    const canvas = document.createElement("canvas");
-    JsBarcode(canvas, e.code, { format: "CODE128", width: 1.6, height: 34, displayValue: false, margin: 0 });
-    const barcodeDataUrl = canvas.toDataURL("image/png");
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-    doc.text(e.model || "", 3, 5, { maxWidth: 44 });
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7);
-    doc.text(`${e.color || ""} · Tam ${e.size}`, 3, 9.5);
-    doc.addImage(barcodeDataUrl, "PNG", 3, 12, 44, 11);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(6);
-    doc.text(e.code, 25, 26, { align: "center" });
+// Gera as etiquetas de UMA cor/variação, repetindo a etiqueta de cada
+// tamanho conforme a quantidade escolhida em qtyBySize (ex.: {P:10, M:0,
+// G:0, GG:6} gera 10 etiquetas de P e 6 de GG). O código combina SKU (ou
+// nome do modelo) + cor + tamanho, para ficar único por peça.
+async function buildStockLabelsPdfBlob(productModel, productSku, variant, qtyBySize) {
+  const baseCode = (productSku || productModel || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
+  const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  const entries = [];
+  SIZES.forEach((s) => {
+    const n = Math.max(0, Math.floor(Number(qtyBySize?.[s]) || 0));
+    for (let i = 0; i < n; i++) entries.push({ model: productModel, color: variant.color, size: s, code: `${baseCode}-${colorCode}-${s}` });
   });
-  return doc.output("blob");
+  return buildLabelsGridPdf(entries);
+}
+
+// Gera etiquetas a partir de uma lista de peças específicas (usado pela
+// Listagem de itens — imprimir uma peça ou várias selecionadas). Cada
+// entrada precisa de { model, color, size, code }, onde code já vem pronto
+// (ex.: "MC01.7") — o código de barras usa exatamente esse texto, dando
+// rastreabilidade única por peça.
+async function buildItemLabelsPdfBlob(entries) {
+  return buildLabelsGridPdf(entries);
 }
 
 // Gera um PDF real (sempre 1 página, a menos que o pedido seja gigante) a partir
@@ -303,8 +304,12 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
         doc.addImage(img, "JPEG", marginX, y, 46, 58);
       } catch (e) { console.error("PDF: não foi possível carregar a foto do item", c.model, e); }
     }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(140, 58, 58);
+    const qtyLabel = `${c.qty}x`;
+    doc.text(qtyLabel, marginX + 58, y + 16);
+    const qtyWidth = doc.getTextWidth(qtyLabel);
     doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(23, 22, 26);
-    doc.text(`${c.qty}x ${c.model}`, marginX + 58, y + 16);
+    doc.text(c.model, marginX + 58 + qtyWidth + 5, y + 16);
     doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(90, 86, 76);
     doc.text(`Cor: ${c.color}  ·  Tam: ${c.size}`, marginX + 58, y + 32);
     if (showPrice) {
@@ -693,12 +698,27 @@ function rowToStockItem(r) {
   // Define a quantidade de um tamanho específico no carrinho (não soma em
   // cima do que já tem) — usado pelo card do produto, que agora mostra e
   // edita a quantidade que já está no carrinho, em vez de sempre partir de 0.
-  function setCartQty(product, variant, size, qty) {
-    const cartItemId = `${product.id}__${variant.id}__${size}`;
-    const existing = cart.find((c) => c.cartItemId === cartItemId);
-    if (qty <= 0) { if (existing) removeCartItem(cartItemId); return; }
-    if (existing) updateCartQty(cartItemId, qty);
-    else addToCart(product, variant, [{ size, qty }]);
+  // Aplica várias mudanças de quantidade (uma por tamanho) de uma vez só,
+  // partindo do MESMO carrinho atual — evita a corrida de antes, onde
+  // gravar um tamanho de cada vez fazia cada gravação "esquecer" a anterior.
+  function commitCartChanges(product, variant, sizeQtyMap) {
+    let nextCart = cart;
+    Object.entries(sizeQtyMap).forEach(([size, qty]) => {
+      const cartItemId = `${product.id}__${variant.id}__${size}`;
+      const idx = nextCart.findIndex((c) => c.cartItemId === cartItemId);
+      if (qty <= 0) {
+        if (idx !== -1) nextCart = nextCart.filter((c) => c.cartItemId !== cartItemId);
+      } else if (idx !== -1) {
+        nextCart = nextCart.map((c, i) => i === idx ? { ...c, qty: Math.max(1, qty) } : c);
+      } else {
+        nextCart = [...nextCart, {
+          cartItemId, productId: product.id, variantId: variant.id, model: product.model, category: product.category, price: product.price,
+          color: variant.color, hex: variant.hex, size, qty, image: variant.images[0] || null,
+        }];
+      }
+    });
+    persistCart(nextCart);
+    setCartOpen(true);
   }
   function removeCartItem(cartItemId) { persistCart(cart.filter((c) => c.cartItemId !== cartItemId)); }
   function clearCart() { persistCart([]); setSelectedClient(null); }
@@ -769,7 +789,7 @@ function rowToStockItem(r) {
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
         <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToCart} />
       ) : (
-        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} setCartQty={setCartQty} />
+        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} />
       )}
       {cartOpen && (
         <CartDrawer
@@ -923,7 +943,7 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
 }
 
 /* ---------------- CATALOG (client-facing) ---------------- */
-function CatalogView({ products, banners, session, addToCart, cart, setCartQty }) {
+function CatalogView({ products, banners, session, addToCart, cart, commitCartChanges }) {
   const showPrice = session.role === "admin" || session.role === "admincentral" || session.role === "representante" || session.access === "atacado";
   const [activeCat, setActiveCat] = useState("Todas");
   const presentCats = CATEGORIES.filter((cat) => products.some((p) => p.category === cat));
@@ -958,7 +978,7 @@ function CatalogView({ products, banners, session, addToCart, cart, setCartQty }
             <div key={cat} style={{ marginBottom: 34 }}>
               {activeCat === "Todas" && <div style={{ fontFamily: "Georgia, serif", fontSize: 19, color: TOKENS.ink, marginBottom: 14, borderLeft: `3px solid ${TOKENS.wine}`, paddingLeft: 10 }}>{cat}</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 22 }}>
-                {items.map((p) => <ProductCard key={p.id} p={p} showPrice={showPrice} addToCart={addToCart} cart={cart} setCartQty={setCartQty} />)}
+                {items.map((p) => <ProductCard key={p.id} p={p} showPrice={showPrice} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} />)}
               </div>
             </div>
           ))
@@ -974,7 +994,7 @@ function CategoryPill({ active, onClick, children }) {
   );
 }
 
-function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
+function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
   const variants = p.variants && p.variants.length ? p.variants : [{ id: "none", color: "", hex: TOKENS.line, images: [], stock: {} }];
   const [vIdx, setVIdx] = useState(0);
   const [imgIdx, setImgIdx] = useState(0);
@@ -1004,10 +1024,12 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
   const hasChanges = SIZES.some((s) => (sizeQty[s] || 0) !== qtyInCart(s));
 
   function commitToCart() {
+    const changes = {};
     SIZES.forEach((s) => {
       const val = sizeQty[s] || 0;
-      if (val !== qtyInCart(s)) setCartQty(p, variant, s, val);
+      if (val !== qtyInCart(s)) changes[s] = val;
     });
+    if (Object.keys(changes).length) commitCartChanges(p, variant, changes);
   }
 
   return (
