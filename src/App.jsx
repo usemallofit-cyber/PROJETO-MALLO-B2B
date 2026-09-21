@@ -990,7 +990,7 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
     const item = cart?.find((c) => c.productId === p.id && c.variantId === variant.id && c.size === size);
     return item ? item.qty : 0;
   }
-  function bump(s, stockQty) { setCartQty(p, variant, s, Math.min(stockQty, qtyInCart(s) + 1)); }
+  function bump(s, stockQty, delta) { setCartQty(p, variant, s, Math.max(0, Math.min(stockQty, qtyInCart(s) + delta))); }
   function setQtyFor(s, val, stockQty) { setCartQty(p, variant, s, Math.max(0, Math.min(stockQty, val))); }
 
   return (
@@ -1039,16 +1039,20 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
             const inCart = current > 0;
             return (
               <div key={s} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                <button disabled={out} onClick={() => bump(s, stockQty)} style={{
-                  width: "100%", textAlign: "center", padding: "5px 0", borderRadius: 3, cursor: out ? "default" : "pointer",
+                <div style={{
+                  width: "100%", textAlign: "center", padding: "5px 0", borderRadius: 3,
                   background: out ? "#F1EDE4" : inCart ? TOKENS.wine : TOKENS.ivorySoft,
                   color: out ? "#B8AF9C" : inCart ? "#fff" : TOKENS.ink,
-                  fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none", border: "none",
-                }}>{s}</button>
+                  fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none",
+                }}>{s}</div>
                 <input type="text" inputMode="numeric" disabled={out} value={current}
                   onChange={(e) => setQtyFor(s, parseInt(e.target.value) || 0, stockQty)}
                   title={inCart ? "Já está no carrinho" : ""}
                   style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${inCart ? "#8FBF8F" : TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : inCart ? "#E9F5E9" : "#fff", color: out ? "#B8AF9C" : inCart ? "#2E6B2E" : TOKENS.ink, fontWeight: inCart ? 600 : 400 }} />
+                <div style={{ display: "flex", gap: 3, width: "100%" }}>
+                  <button disabled={out || current <= 0} onClick={() => bump(s, stockQty, -1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out || current <= 0 ? "#D8D0C0" : TOKENS.graphite, cursor: out || current <= 0 ? "default" : "pointer" }}><Minus size={11} /></button>
+                  <button disabled={out} onClick={() => bump(s, stockQty, 1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out ? "#D8D0C0" : TOKENS.graphite, cursor: out ? "default" : "pointer" }}><Plus size={11} /></button>
+                </div>
               </div>
             );
           })}
