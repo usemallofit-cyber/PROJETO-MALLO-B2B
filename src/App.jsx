@@ -690,10 +690,12 @@ function rowToStockItem(r) {
   function removeCartItem(cartItemId) { persistCart(cart.filter((c) => c.cartItemId !== cartItemId)); }
   function clearCart() { persistCart([]); setSelectedClient(null); }
 
-  function finalizeOrder() {
+  async function finalizeOrder() {
     if (!cart.length || !session) return;
-    // Confere a disponibilidade agora, na hora de finalizar de verdade —
-    // é só aqui que o estoque é abatido, então é aqui que a checagem importa.
+    // Confere a disponibilidade agora mesmo, pro aviso ser rápido — o abate
+    // de verdade acontece no servidor (função finalize-order), que confere
+    // tudo de novo antes de gravar, então essa checagem aqui é só uma
+    // resposta rápida pro usuário, não a garantia final.
     const insufficientItem = cart.find((c) => {
       const liveProduct = products.find((p) => p.id === c.productId);
       const liveVariant = liveProduct?.variants.find((v) => v.id === c.variantId);
@@ -704,44 +706,26 @@ function rowToStockItem(r) {
       alert("Ainda há itens com estoque insuficiente (em vermelho). Ajuste a quantidade ou remova esses itens antes de finalizar.");
       return;
     }
-    let nextProducts = products;
-    cart.forEach((c) => {
-      nextProducts = nextProducts.map((p) => p.id !== c.productId ? p : {
-        ...p,
-        variants: p.variants.map((v) => v.id !== c.variantId ? v : { ...v, stock: { ...v.stock, [c.size]: Math.max(0, (v.stock?.[c.size] || 0) - c.qty) } }),
-      });
-    });
-    persistProducts(nextProducts);
 
     const items = cart.map((c) => {
       const prod = products.find((p) => p.id === c.productId);
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId };
     });
- const record = {
-      id: uid("ord_"), date: new Date().toISOString(),
-      clientName: selectedClient?.buyerName || session.name || session.username,
-      sellerName: session.name || session.username, sellerRole: session.role, sellerUsername: session.username,
-      items,
-      status: "Enviado à fábrica",
-      statusLog: [{ status: "Enviado à fábrica", by: session.name || session.username, when: new Date().toISOString() }],
-    };
-    persistOrders([...orders, record]);
-
-    // Marca as peças individuais (numeradas) mais antigas disponíveis como
-    // vendidas neste pedido, para dar rastreabilidade na Listagem de itens.
-    if (stockItems.length) {
-      let nextStockItems = stockItems;
-      cart.forEach((c) => {
-        let remaining = c.qty;
-        nextStockItems = nextStockItems.map((si) => {
-          if (remaining <= 0 || si.orderId || si.productId !== c.productId || si.variantId !== c.variantId || si.size !== c.size) return si;
-          remaining--;
-          return { ...si, orderId: record.id };
-        });
-      });
-      if (nextStockItems !== stockItems) persistStockItems(nextStockItems);
+    const { data, error } = await supabase.functions.invoke("finalize-order", {
+      body: { clientName: selectedClient?.buyerName || session.name || session.username, items },
+    });
+    if (error || data?.error) {
+      if (data?.shortages?.length) {
+        alert("O estoque mudou enquanto você revisava o carrinho (outra pessoa deve ter finalizado um pedido igual). Recarregue a página e ajuste as quantidades.");
+      } else {
+        alert(data?.error || "Não foi possível finalizar o pedido agora. Tente novamente.");
+      }
+      return;
     }
 
+    // O abate de estoque e a marcação das peças vendidas já aconteceram no
+    // servidor — recarrega os dados pra refletir isso na tela.
+    await loadAppData();
     // Encerra a ação de estar no carrinho: esvazia o carrinho e o cliente
     // selecionado, já que o pedido acabou de ser liberado para a aba Pedidos.
     persistCart([]);
