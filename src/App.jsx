@@ -2193,7 +2193,7 @@ function ClientesAdmin({ users, setUsers, role, title }) {
   // isso exige a chave de administrador do Supabase, que nunca fica exposta
   // no navegador.
   async function generate() {
-    if (!name.trim()) return;
+    if (!name.trim()) { setCreateError("Preencha o nome antes de gerar o login."); return; }
     setCreateError("");
     const base = name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, ".").replace(/(^\.|\.$)/g, "");
     let username = base || uid(role === "representante" ? "rep_" : role === "admin" ? "func_" : "cli_");
