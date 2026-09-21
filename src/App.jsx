@@ -81,6 +81,22 @@ async function diffSyncTable(table, idField, prevList, nextList, toRow) {
   }
 }
 
+// Repete uma chamada ao Supabase (ou a uma função do servidor) até 3 vezes
+// se ela vier com erro — cobre a corrida de sessão que pode acontecer logo
+// após o login/recarregamento, antes da sessão terminar de "assentar".
+// Funciona tanto para supabase.from(...) quanto para supabase.functions.invoke(...),
+// já que ambos retornam { data, error }.
+async function withRetry(fn) {
+  let lastResult;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    lastResult = await fn();
+    if (!lastResult.error) return lastResult;
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+  }
+  console.error("Erro no Supabase após tentativas:", lastResult.error);
+  return lastResult;
+}
+
 // Sincroniza uma tabela inteira com a lista de linhas desejada: grava
 // (upsert) todas as linhas da lista e apaga do banco qualquer linha que não
 // esteja mais nela. Seguro para tabelas onde quem escreve sempre enxerga a
@@ -453,19 +469,6 @@ export default function App() {
   // login é confirmado (ver loadAppData / handleLogin).
   useEffect(() => { setBooted(true); }, []);
 
-// Repete uma chamada ao Supabase até 3 vezes se ela vier com erro (cobre a
-// mesma corrida de sessão logo após o login que já tratamos em storageGet).
-async function withRetry(fn) {
-  let lastResult;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    lastResult = await fn();
-    if (!lastResult.error) return lastResult;
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-  }
-  console.error("Erro no Supabase após tentativas:", lastResult.error);
-  return lastResult;
-}
-
   async function loadAppData() {
     await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
     const [profRows, pRows, bRows, sRow, clRows, ordRows, siRows] = await Promise.all([
@@ -711,9 +714,9 @@ function rowToStockItem(r) {
       const prod = products.find((p) => p.id === c.productId);
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId };
     });
-    const { data, error } = await supabase.functions.invoke("finalize-order", {
+    const { data, error } = await withRetry(() => supabase.functions.invoke("finalize-order", {
       body: { clientName: selectedClient?.buyerName || session.name || session.username, items },
-    });
+    }));
     if (error || data?.error) {
       if (data?.shortages?.length) {
         alert("O estoque mudou enquanto você revisava o carrinho (outra pessoa deve ter finalizado um pedido igual). Recarregue a página e ajuste as quantidades.");
@@ -2274,9 +2277,9 @@ function ClientesAdmin({ users, setUsers, role, title }) {
     while (users[username]) { username = `${base}${n}`; n++; }
     const finalAccess = role === "representante" ? "atacado" : access;
     setCreating(true);
-    const { data, error } = await supabase.functions.invoke("staff-accounts", {
+    const { data, error } = await withRetry(() => supabase.functions.invoke("staff-accounts", {
       body: { action: "create", username, name: name.trim(), role, access: finalAccess },
-    });
+    }));
     setCreating(false);
     if (error || data?.error) { setCreateError(data?.error || "Não foi possível criar o login agora. Tente novamente."); return; }
     setUsers({ ...users, [data.username]: { name: data.name, role, access: data.access, authEmail: `${data.username}@mallo.internal` } });
@@ -2286,7 +2289,7 @@ function ClientesAdmin({ users, setUsers, role, title }) {
   async function revoke(username) {
     if (!confirm(`Revogar acesso de "${username}"?`)) return;
     setRevokingId(username);
-    const { data, error } = await supabase.functions.invoke("staff-accounts", { body: { action: "revoke", username } });
+    const { data, error } = await withRetry(() => supabase.functions.invoke("staff-accounts", { body: { action: "revoke", username } }));
     setRevokingId("");
     if (error || data?.error) { alert(data?.error || "Não foi possível revogar agora. Tente novamente."); return; }
     const n = { ...users }; delete n[username]; setUsers(n);
@@ -2294,7 +2297,7 @@ function ClientesAdmin({ users, setUsers, role, title }) {
   async function resetPassword(username) {
     if (!confirm(`Gerar uma nova senha para "${username}"? A senha antiga deixa de funcionar.`)) return;
     setRevokingId(username);
-    const { data, error } = await supabase.functions.invoke("staff-accounts", { body: { action: "reset", username } });
+    const { data, error } = await withRetry(() => supabase.functions.invoke("staff-accounts", { body: { action: "reset", username } }));
     setRevokingId("");
     if (error || data?.error) { alert(data?.error || "Não foi possível redefinir a senha agora. Tente novamente."); return; }
     setLastGenerated({ username: data.username, password: data.password, name: data.name, access: data.access });
