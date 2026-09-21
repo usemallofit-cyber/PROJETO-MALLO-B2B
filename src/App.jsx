@@ -38,6 +38,49 @@ function rowToProduct(r) {
 function bannerToRow(b, i) { return { id: b.id, url: b.url, sort_order: i }; }
 function rowToBanner(r) { return { id: r.id, url: r.url }; }
 
+function clientToRow(c) {
+  return { id: c.id, buyer_name: c.buyerName, cnpj: c.cnpj || null, cpf: c.cpf || null, ie: c.ie || null,
+    email: c.email || null, phone: c.phone || null, address: c.address || null, instagram: c.instagram || null,
+    client_references: c.references || null, rep_username: c.repUsername || null };
+}
+function rowToClient(r) {
+  return { id: r.id, buyerName: r.buyer_name, cnpj: r.cnpj, cpf: r.cpf, ie: r.ie, email: r.email, phone: r.phone,
+    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username };
+}
+
+function orderToRow(o) {
+  return { id: o.id, date: o.date, client_name: o.clientName, seller_name: o.sellerName, seller_role: o.sellerRole,
+    seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [] };
+}
+function rowToOrder(r) {
+  return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
+    sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [] };
+}
+
+// Sincroniza uma tabela comparando a lista anterior com a nova, gravando só
+// o que mudou (novo ou alterado) e apagando só o que sumiu da lista — ao
+// contrário de syncTable (que trata a lista como "a tabela inteira"), este
+// é seguro para tabelas onde cada papel só enxerga parte dos dados (ex.:
+// um representante só vê os próprios clientes/pedidos), porque nunca mexe
+// em linhas que não estavam na lista anterior nem estão na nova.
+async function diffSyncTable(table, idField, prevList, nextList, toRow) {
+  const prevMap = new Map(prevList.map((x) => [x[idField], x]));
+  const nextIds = new Set(nextList.map((x) => x[idField]));
+  const toUpsert = nextList.filter((x) => {
+    const prev = prevMap.get(x[idField]);
+    return !prev || JSON.stringify(prev) !== JSON.stringify(x);
+  });
+  const toDeleteIds = prevList.filter((x) => !nextIds.has(x[idField])).map((x) => x[idField]);
+  if (toUpsert.length) {
+    const { error } = await supabase.from(table).upsert(toUpsert.map(toRow));
+    if (error) throw error;
+  }
+  if (toDeleteIds.length) {
+    const { error } = await supabase.from(table).delete().in(idField, toDeleteIds);
+    if (error) throw error;
+  }
+}
+
 // Sincroniza uma tabela inteira com a lista de linhas desejada: grava
 // (upsert) todas as linhas da lista e apaga do banco qualquer linha que não
 // esteja mais nela. Seguro para tabelas onde quem escreve sempre enxerga a
@@ -425,20 +468,22 @@ async function withRetry(fn) {
 
   async function loadAppData() {
     await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
-    const [u, pRows, bRows, sRow, cl, ord, si] = await Promise.all([
+    const [u, pRows, bRows, sRow, clRows, ordRows, siRows] = await Promise.all([
       storageGet(STORE_KEYS.users, true),
       withRetry(() => supabase.from("products").select("*")),
       withRetry(() => supabase.from("banners").select("*").order("sort_order")),
       withRetry(() => supabase.from("settings").select("*").eq("id", 1).maybeSingle()),
-      storageGet(STORE_KEYS.clients, true), storageGet(STORE_KEYS.orders, true),
-      storageGet(STORE_KEYS.stockItems, true),
+      withRetry(() => supabase.from("clients").select("*")),
+      withRetry(() => supabase.from("orders").select("*")),
+      withRetry(() => supabase.from("stock_items").select("*")),
     ]);
     const finalUsers = u || {};
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
     setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "" } : { orderEmail: "", orderWhatsapp: "" });
-    setClients(cl || []); setOrders(ord || []); setStockItems(si || []);
+    setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
+    setStockItems((siRows.data || []).map(rowToStockItem));
     return finalUsers;
   }
 
@@ -458,9 +503,30 @@ async function withRetry(fn) {
       if (error) throw error;
     } catch (e) { console.error("Erro ao salvar configurações:", e); }
   }, []);
-  const persistClients = useCallback(async (next) => { setClients(next); await storageSet(STORE_KEYS.clients, next, true); }, []);
-  const persistOrders = useCallback(async (next) => { setOrders(next); await storageSet(STORE_KEYS.orders, next, true); }, []);
-  const persistStockItems = useCallback(async (next) => { setStockItems(next); await storageSet(STORE_KEYS.stockItems, next, true); }, []);
+  const persistClients = useCallback(async (next) => {
+    const prev = clients;
+    setClients(next);
+    try { await diffSyncTable("clients", "id", prev, next, clientToRow); } catch (e) { console.error("Erro ao salvar clientes:", e); }
+  }, [clients]);
+  const persistOrders = useCallback(async (next) => {
+    const prev = orders;
+    setOrders(next);
+    try { await diffSyncTable("orders", "id", prev, next, orderToRow); } catch (e) { console.error("Erro ao salvar pedidos:", e); }
+  }, [orders]);
+function stockItemToRow(si) {
+  return { id: si.id, product_id: si.productId, variant_id: si.variantId, model: si.model, sku: si.sku,
+    color: si.color, hex: si.hex, size: si.size, seq: si.seq, order_id: si.orderId || null };
+}
+function rowToStockItem(r) {
+  return { id: r.id, productId: r.product_id, variantId: r.variant_id, model: r.model, sku: r.sku,
+    color: r.color, hex: r.hex, size: r.size, seq: r.seq, orderId: r.order_id };
+}
+
+  const persistStockItems = useCallback(async (next) => {
+    const prev = stockItems;
+    setStockItems(next);
+    try { await diffSyncTable("stock_items", "id", prev, next, stockItemToRow); } catch (e) { console.error("Erro ao salvar itens de estoque:", e); }
+  }, [stockItems]);
 
   // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
   // (cancelamento), sign=-1 abate de novo (pedido reativado a partir de
@@ -571,8 +637,8 @@ async function withRetry(fn) {
     const u = { username, ...finalUsers[username] };
     setSession(u);
     setSelectedClient(null);
-    const savedCart = await storageGet(`cart_${username}`, false);
-    setCart(savedCart || []);
+    const { data: cartRow } = await withRetry(() => supabase.from("carts").select("items").eq("username", username).maybeSingle());
+    setCart(cartRow?.items || []);
   }
   function handleLogout() {
     if (session?.authEmail) supabase.auth.signOut();
@@ -581,7 +647,12 @@ async function withRetry(fn) {
 
   const persistCart = useCallback(async (next) => {
     setCart(next);
-    if (session) await storageSet(`cart_${session.username}`, next, false);
+    if (session) {
+      try {
+        const { error } = await supabase.from("carts").upsert({ username: session.username, items: next, updated_at: new Date().toISOString() });
+        if (error) throw error;
+      } catch (e) { console.error("Erro ao salvar carrinho:", e); }
+    }
   }, [session]);
 
   // Modelo de estoque: adicionar, remover ou ajustar a quantidade de um item
