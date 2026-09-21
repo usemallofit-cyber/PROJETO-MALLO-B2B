@@ -221,6 +221,42 @@ function drawLabel(doc, x, y, model, color, size, code, barcodeDataUrl) {
   doc.text(code, x + LABEL_W / 2, y + LABEL_H - 1.3, { align: "center" });
 }
 
+// Gera o comando EPL2 (texto puro, não PDF) para a Zebra GC420t — a própria
+// impressora entende esse texto direto, sem depender de escala/driver do
+// Windows. Calculado para etiqueta 33 x 21mm a 203dpi (8 pontos por mm).
+// "gapDots" é a distância entre etiquetas na bobina — ajuste se a etiqueta
+// sair descolocada (cada etiqueta física normalmente tem uns 2-3mm de vão).
+function buildEplLabels(entries, gapDots = 24) {
+  const DPMM = 8; // 203dpi = 8 pontos por mm
+  const W = Math.round(33 * DPMM);
+  const H = Math.round(21 * DPMM);
+  const margin = Math.round(1.5 * DPMM);
+  let out = "";
+  entries.forEach((e) => {
+    const code = (e.code || "").replace(/["\\]/g, "");
+    const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24);
+    const colorSize = `${(e.color || "").replace(/["\\]/g, "")} - ${e.size || ""}`;
+    out += `N\n`;
+    out += `q${W}\n`;
+    out += `Q${H},${gapDots}\n`;
+    out += `A${margin},${Math.round(2 * DPMM)},0,1,1,1,N,"${model}"\n`;
+    out += `A${margin},${Math.round(5.5 * DPMM)},0,1,1,1,N,"${colorSize}"\n`;
+    out += `B${margin},${Math.round(8 * DPMM)},0,1B,2,2,${Math.round(7 * DPMM)},N,"${code}"\n`;
+    out += `A${margin},${Math.round(17.5 * DPMM)},0,1,1,1,N,"${code}"\n`;
+    out += `P1\n`;
+  });
+  return out;
+}
+
+function downloadEplFile(text, filename) {
+  const blob = new Blob([text], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // Recebe uma lista de etiquetas já expandida — uma entrada por peça física
 // — no formato { model, color, size, code }, e desenha todas na grade.
 async function buildLabelsGridPdf(entries) {
@@ -1983,6 +2019,21 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
       alert(`Não foi possível gerar as etiquetas agora.\nDetalhe do erro: ${e?.message || e}`);
     } finally { setGeneratingLabels(false); }
   }
+  // Gera o arquivo .epl (comando direto para a Zebra GC420t) com as mesmas
+  // etiquetas, para quem imprime direto na impressora em vez de via PDF.
+  function confirmGenerateEpl() {
+    const { product, variant } = labelModal;
+    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
+    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+    const entries = [];
+    SIZES.forEach((s) => {
+      const n = Math.max(0, Math.floor(Number(labelQty[s]) || 0));
+      for (let i = 0; i < n; i++) entries.push({ model: product.model, color: variant.color, size: s, code: `${baseCode}-${colorCode}-${s}` });
+    });
+    if (!entries.length) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
+    downloadEplFile(buildEplLabels(entries), `etiquetas-${(product.model || "produto").replace(/\s+/g, "-").toLowerCase()}-${(variant.color || "cor").replace(/\s+/g, "-").toLowerCase()}.epl`);
+    setLabelModal(null);
+  }
 
   const list = filterCat === "Todas" ? products : products.filter((p) => p.category === filterCat);
 
@@ -2065,7 +2116,8 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
             </div>
             <div style={modalFooterStyle}>
               <button onClick={() => setLabelModal(null)} style={btnGhostSmall}>Cancelar</button>
-              <button onClick={confirmGenerateLabels} disabled={generatingLabels} style={btnPrimary}><Printer size={15} /> {generatingLabels ? "Gerando..." : "Gerar etiquetas"}</button>
+              <button onClick={confirmGenerateEpl} style={btnGhostSmall}>.epl (Zebra)</button>
+              <button onClick={confirmGenerateLabels} disabled={generatingLabels} style={btnPrimary}><Printer size={15} /> {generatingLabels ? "Gerando..." : "Gerar etiquetas (PDF)"}</button>
             </div>
           </div>
         </div>
