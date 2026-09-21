@@ -978,20 +978,37 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
   const variants = p.variants && p.variants.length ? p.variants : [{ id: "none", color: "", hex: TOKENS.line, images: [], stock: {} }];
   const [vIdx, setVIdx] = useState(0);
   const [imgIdx, setImgIdx] = useState(0);
+  const [sizeQty, setSizeQty] = useState({});
   const variant = variants[vIdx];
   const imgs = variant.images && variant.images.length ? variant.images : [null];
 
-  useEffect(() => { setImgIdx(0); }, [vIdx]);
-
-  // A quantidade de cada tamanho vem direto do carrinho — assim, ao voltar
-  // num produto já adicionado, a caixinha mostra o que já está lá em vez de
-  // aparecer zerada.
-  function qtyInCart(size) {
-    const item = cart?.find((c) => c.productId === p.id && c.variantId === variant.id && c.size === size);
+  function qtyInCart(size, v = variant) {
+    const item = cart?.find((c) => c.productId === p.id && c.variantId === v.id && c.size === size);
     return item ? item.qty : 0;
   }
-  function bump(s, stockQty, delta) { setCartQty(p, variant, s, Math.max(0, Math.min(stockQty, qtyInCart(s) + delta))); }
-  function setQtyFor(s, val, stockQty) { setCartQty(p, variant, s, Math.max(0, Math.min(stockQty, val))); }
+
+  // Ao trocar de cor (ou abrir o produto), a caixinha já parte do que estiver
+  // no carrinho para essa cor — assim não some nem some quantidade que já
+  // tinha sido adicionada antes.
+  useEffect(() => {
+    setImgIdx(0);
+    const initial = {};
+    SIZES.forEach((s) => { initial[s] = qtyInCart(s, variant); });
+    setSizeQty(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vIdx]);
+
+  function bump(s, stockQty, delta) { setSizeQty((q) => ({ ...q, [s]: Math.max(0, Math.min(stockQty, (q[s] || 0) + delta)) })); }
+  function setQtyFor(s, val, stockQty) { setSizeQty((q) => ({ ...q, [s]: Math.max(0, Math.min(stockQty, val)) })); }
+  const totalQty = Object.values(sizeQty).reduce((a, b) => a + b, 0);
+  const hasChanges = SIZES.some((s) => (sizeQty[s] || 0) !== qtyInCart(s));
+
+  function commitToCart() {
+    SIZES.forEach((s) => {
+      const val = sizeQty[s] || 0;
+      if (val !== qtyInCart(s)) setCartQty(p, variant, s, val);
+    });
+  }
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1035,7 +1052,7 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
           {SIZES.map((s) => {
             const stockQty = variant.stock ? (variant.stock[s] || 0) : 0;
             const out = !stockQty;
-            const current = qtyInCart(s);
+            const current = sizeQty[s] || 0;
             const inCart = current > 0;
             return (
               <div key={s} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
@@ -1047,7 +1064,7 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
                 }}>{s}</div>
                 <input type="text" inputMode="numeric" disabled={out} value={current}
                   onChange={(e) => setQtyFor(s, parseInt(e.target.value) || 0, stockQty)}
-                  title={inCart ? "Já está no carrinho" : ""}
+                  title={inCart ? "Será adicionado/atualizado no carrinho" : ""}
                   style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${inCart ? "#8FBF8F" : TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : inCart ? "#E9F5E9" : "#fff", color: out ? "#B8AF9C" : inCart ? "#2E6B2E" : TOKENS.ink, fontWeight: inCart ? 600 : 400 }} />
                 <div style={{ display: "flex", gap: 3, width: "100%" }}>
                   <button disabled={out || current <= 0} onClick={() => bump(s, stockQty, -1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out || current <= 0 ? "#D8D0C0" : TOKENS.graphite, cursor: out || current <= 0 ? "default" : "pointer" }}><Minus size={11} /></button>
@@ -1067,6 +1084,15 @@ function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
               </div>
             );
           })}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <button
+            disabled={!hasChanges || !p.variants?.length}
+            onClick={commitToCart}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: hasChanges ? TOKENS.wine : TOKENS.line, color: "#fff", border: "none", borderRadius: 3, padding: "9px 0", fontSize: 12.5, cursor: hasChanges ? "pointer" : "default" }}>
+            <ShoppingCart size={13} /> {hasChanges ? `Adicionar (${totalQty})` : "Adicionar"}
+          </button>
         </div>
       </div>
     </div>
