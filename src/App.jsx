@@ -690,6 +690,16 @@ function rowToStockItem(r) {
   function updateCartQty(cartItemId, qty) {
     persistCart(cart.map((c) => c.cartItemId === cartItemId ? { ...c, qty: Math.max(1, qty) } : c));
   }
+  // Define a quantidade de um tamanho específico no carrinho (não soma em
+  // cima do que já tem) — usado pelo card do produto, que agora mostra e
+  // edita a quantidade que já está no carrinho, em vez de sempre partir de 0.
+  function setCartQty(product, variant, size, qty) {
+    const cartItemId = `${product.id}__${variant.id}__${size}`;
+    const existing = cart.find((c) => c.cartItemId === cartItemId);
+    if (qty <= 0) { if (existing) removeCartItem(cartItemId); return; }
+    if (existing) updateCartQty(cartItemId, qty);
+    else addToCart(product, variant, [{ size, qty }]);
+  }
   function removeCartItem(cartItemId) { persistCart(cart.filter((c) => c.cartItemId !== cartItemId)); }
   function clearCart() { persistCart([]); setSelectedClient(null); }
 
@@ -759,7 +769,7 @@ function rowToStockItem(r) {
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
         <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToCart} />
       ) : (
-        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} />
+        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} setCartQty={setCartQty} />
       )}
       {cartOpen && (
         <CartDrawer
@@ -913,7 +923,7 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
 }
 
 /* ---------------- CATALOG (client-facing) ---------------- */
-function CatalogView({ products, banners, session, addToCart }) {
+function CatalogView({ products, banners, session, addToCart, cart, setCartQty }) {
   const showPrice = session.role === "admin" || session.role === "admincentral" || session.role === "representante" || session.access === "atacado";
   const [activeCat, setActiveCat] = useState("Todas");
   const presentCats = CATEGORIES.filter((cat) => products.some((p) => p.category === cat));
@@ -948,7 +958,7 @@ function CatalogView({ products, banners, session, addToCart }) {
             <div key={cat} style={{ marginBottom: 34 }}>
               {activeCat === "Todas" && <div style={{ fontFamily: "Georgia, serif", fontSize: 19, color: TOKENS.ink, marginBottom: 14, borderLeft: `3px solid ${TOKENS.wine}`, paddingLeft: 10 }}>{cat}</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 22 }}>
-                {items.map((p) => <ProductCard key={p.id} p={p} showPrice={showPrice} addToCart={addToCart} />)}
+                {items.map((p) => <ProductCard key={p.id} p={p} showPrice={showPrice} addToCart={addToCart} cart={cart} setCartQty={setCartQty} />)}
               </div>
             </div>
           ))
@@ -964,19 +974,24 @@ function CategoryPill({ active, onClick, children }) {
   );
 }
 
-function ProductCard({ p, showPrice, addToCart }) {
+function ProductCard({ p, showPrice, addToCart, cart, setCartQty }) {
   const variants = p.variants && p.variants.length ? p.variants : [{ id: "none", color: "", hex: TOKENS.line, images: [], stock: {} }];
   const [vIdx, setVIdx] = useState(0);
   const [imgIdx, setImgIdx] = useState(0);
-  const [sizeQty, setSizeQty] = useState({});
   const variant = variants[vIdx];
   const imgs = variant.images && variant.images.length ? variant.images : [null];
 
-  useEffect(() => { setImgIdx(0); setSizeQty({}); }, [vIdx]);
+  useEffect(() => { setImgIdx(0); }, [vIdx]);
 
-  function bump(s, stockQty) { setSizeQty((q) => ({ ...q, [s]: Math.min(stockQty, (q[s] || 0) + 1) })); }
-  function setQtyFor(s, val, stockQty) { setSizeQty((q) => ({ ...q, [s]: Math.max(0, Math.min(stockQty, val)) })); }
-  const totalQty = Object.values(sizeQty).reduce((a, b) => a + b, 0);
+  // A quantidade de cada tamanho vem direto do carrinho — assim, ao voltar
+  // num produto já adicionado, a caixinha mostra o que já está lá em vez de
+  // aparecer zerada.
+  function qtyInCart(size) {
+    const item = cart?.find((c) => c.productId === p.id && c.variantId === variant.id && c.size === size);
+    return item ? item.qty : 0;
+  }
+  function bump(s, stockQty) { setCartQty(p, variant, s, Math.min(stockQty, qtyInCart(s) + 1)); }
+  function setQtyFor(s, val, stockQty) { setCartQty(p, variant, s, Math.max(0, Math.min(stockQty, val))); }
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1020,18 +1035,20 @@ function ProductCard({ p, showPrice, addToCart }) {
           {SIZES.map((s) => {
             const stockQty = variant.stock ? (variant.stock[s] || 0) : 0;
             const out = !stockQty;
-            const current = sizeQty[s] || 0;
+            const current = qtyInCart(s);
+            const inCart = current > 0;
             return (
               <div key={s} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                 <button disabled={out} onClick={() => bump(s, stockQty)} style={{
                   width: "100%", textAlign: "center", padding: "5px 0", borderRadius: 3, cursor: out ? "default" : "pointer",
-                  background: out ? "#F1EDE4" : current > 0 ? TOKENS.wine : TOKENS.ivorySoft,
-                  color: out ? "#B8AF9C" : current > 0 ? "#fff" : TOKENS.ink,
+                  background: out ? "#F1EDE4" : inCart ? TOKENS.wine : TOKENS.ivorySoft,
+                  color: out ? "#B8AF9C" : inCart ? "#fff" : TOKENS.ink,
                   fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none", border: "none",
                 }}>{s}</button>
                 <input type="text" inputMode="numeric" disabled={out} value={current}
                   onChange={(e) => setQtyFor(s, parseInt(e.target.value) || 0, stockQty)}
-                  style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : "#fff", color: out ? "#B8AF9C" : TOKENS.ink }} />
+                  title={inCart ? "Já está no carrinho" : ""}
+                  style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${inCart ? "#8FBF8F" : TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : inCart ? "#E9F5E9" : "#fff", color: out ? "#B8AF9C" : inCart ? "#2E6B2E" : TOKENS.ink, fontWeight: inCart ? 600 : 400 }} />
               </div>
             );
           })}
@@ -1047,20 +1064,6 @@ function ProductCard({ p, showPrice, addToCart }) {
             );
           })}
         </div>
-
-        <div style={{ marginTop: 12 }}>
-          <button
-            disabled={!totalQty || !p.variants?.length}
-            onClick={() => {
-              const items = SIZES.filter((s) => (sizeQty[s] || 0) > 0).map((s) => ({ size: s, qty: sizeQty[s] }));
-              addToCart(p, variant, items);
-              setSizeQty({});
-            }}
-            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: totalQty ? TOKENS.wine : TOKENS.line, color: "#fff", border: "none", borderRadius: 3, padding: "9px 0", fontSize: 12.5, cursor: totalQty ? "pointer" : "default" }}>
-            <ShoppingCart size={13} /> Adicionar ({totalQty})
-          </button>
-        </div>
-        {!totalQty && p.variants?.length > 0 && <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 6 }}>Clique em um tamanho para somar quantidade</div>}
       </div>
     </div>
   );
