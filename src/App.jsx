@@ -2149,6 +2149,7 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   const order = orders.find((o) => o.id === initialOrder.id) || initialOrder;
   const [code, setCode] = useState("");
   const [feedback, setFeedback] = useState(null);
+  const [printing, setPrinting] = useState(false);
   const inputRef = useRef();
   useEffect(() => { inputRef.current?.focus(); }, [order.id]);
 
@@ -2172,12 +2173,29 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
     onBack();
   }
 
+  async function printOrder() {
+    setPrinting(true);
+    try {
+      const blob = await buildOrderPdfBlob(order.items, { name: order.sellerName, username: order.sellerUsername }, true, { buyerName: order.clientName });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `pedido-${order.clientName.replace(/\s+/g, "-").toLowerCase()}-${order.id}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Não foi possível gerar o PDF agora. Tente novamente em alguns segundos.");
+    } finally { setPrinting(false); }
+  }
+
   return (
     <div>
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
-      <div style={{ margin: "12px 0" }}>
-        <div style={{ fontSize: 12, color: TOKENS.graphite }}>Coletando pedido de</div>
-        <div style={{ fontFamily: "Georgia, serif", fontSize: 19 }}>{order.clientName}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", margin: "12px 0" }}>
+        <div>
+          <div style={{ fontSize: 12, color: TOKENS.graphite }}>Coletando pedido de</div>
+          <div style={{ fontFamily: "Georgia, serif", fontSize: 19 }}>{order.clientName}</div>
+        </div>
+        <button onClick={printOrder} disabled={printing} style={btnGhostSmall}><Printer size={13} /> {printing ? "Gerando..." : "Imprimir pedido"}</button>
       </div>
       <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
