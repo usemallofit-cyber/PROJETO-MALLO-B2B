@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -79,6 +79,39 @@ async function diffSyncTable(table, idField, prevList, nextList, toRow) {
     const { error } = await supabase.from(table).delete().in(idField, toDeleteIds);
     if (error) throw error;
   }
+}
+
+// Reconhece um código bipado (leitor de código de barras) e descobre qual
+// produto/variação/tamanho ele representa — aceita os dois formatos usados
+// nas etiquetas: o individual "SKU.7" (Listagem de itens) e o em lote
+// "SKU-COR-TAM" (etiquetas por cor/tamanho). Tenta alguns tamanhos de corte
+// diferentes pro SKU/cor porque o comprimento mudou entre o PDF e o EPL.
+function matchScannedCode(rawCode, products, stockItems) {
+  const code = (rawCode || "").trim().toUpperCase();
+  if (!code) return null;
+
+  const dotMatch = code.match(/^(.+)\.(\d+)$/);
+  if (dotMatch) {
+    const item = (stockItems || []).find((si) => `${(si.sku || "").toUpperCase()}.${si.seq}` === code);
+    if (item) return { productId: item.productId, variantId: item.variantId, size: item.size };
+  }
+
+  const parts = code.split("-");
+  if (parts.length >= 3) {
+    const size = parts[parts.length - 1];
+    const colorCode = parts[parts.length - 2];
+    const baseCode = parts.slice(0, -2).join("-");
+    for (const p of products) {
+      const raw = (p.sku || p.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "") || "ITEM";
+      if (raw.slice(0, 14) !== baseCode && raw.slice(0, 10) !== baseCode) continue;
+      const variant = (p.variants || []).find((v) => {
+        const rawColor = (v.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        return rawColor.slice(0, 4) === colorCode || rawColor.slice(0, 3) === colorCode;
+      });
+      if (variant) return { productId: p.id, variantId: variant.id, size };
+    }
+  }
+  return null;
 }
 
 // Repete uma chamada ao Supabase (ou a uma função do servidor) até 3 vezes
@@ -249,25 +282,36 @@ function buildEplLabels(entries, gapDots = 24) {
   const LABEL_W = Math.round(33 * DPMM); // 264
   const LABEL_H = Math.round(21 * DPMM); // 168
   const COLS = 3; // a folha física tem 3 etiquetas lado a lado
+  const ROWS_PER_BATCH = 6; // quantas fileiras viram "uma etiqueta só" por vez
   const margin = 20; // mesma margem do teste que já imprimiu certinho
   const rowWidth = LABEL_W * COLS + gapDots * (COLS - 1);
-  let out = "";
-  for (let i = 0; i < entries.length; i += COLS) {
-    const rowEntries = entries.slice(i, i + COLS);
+
+  // Agrupa as fileiras em lotes e trata cada lote como UMA ÚNICA etiqueta
+  // "alta" (várias fileiras reais empilhadas, com o espaço em branco exato
+  // onde ficam os vãos reais entre elas). A impressora só precisa se
+  // localizar (sensor de vão) uma vez no início de cada lote, em vez de a
+  // cada fileira — era aí que ela perdia a posição e pulava etiquetas.
+  const rows = [];
+  for (let i = 0; i < entries.length; i += COLS) rows.push(entries.slice(i, i + COLS));
+
+  let out = `D12\nS2\nq${rowWidth}\n`;
+  for (let b = 0; b < rows.length; b += ROWS_PER_BATCH) {
+    const batchRows = rows.slice(b, b + ROWS_PER_BATCH);
+    const batchHeight = batchRows.length * LABEL_H + (batchRows.length - 1) * gapDots;
+    out += `Q${batchHeight},${gapDots}\n`;
     out += `N\n`;
-    out += `D12\n`;
-    out += `S2\n`;
-    out += `q${rowWidth}\n`;
-    out += `Q${LABEL_H},${gapDots}\n`;
-    rowEntries.forEach((e, col) => {
-      const x = col * (LABEL_W + gapDots) + margin;
-      const code = (e.code || "").replace(/["\\]/g, "");
-      const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24);
-      const colorSize = `${(e.color || "").replace(/["\\]/g, "")} - ${e.size || ""}`;
-      out += `A${x},8,0,2,1,1,N,"${model}"\n`;
-      out += `A${x},32,0,2,1,1,N,"${colorSize}"\n`;
-      out += `B${x},54,0,1B,1,1,35,N,"${code}"\n`;
-      out += `A${x},98,0,2,1,1,N,"${code}"\n`;
+    batchRows.forEach((rowEntries, r) => {
+      const yBase = r * (LABEL_H + gapDots);
+      rowEntries.forEach((e, col) => {
+        const x = col * (LABEL_W + gapDots) + margin;
+        const code = (e.code || "").replace(/["\\]/g, "").toUpperCase();
+        const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24).toUpperCase();
+        const colorSize = `${(e.color || "").replace(/["\\]/g, "")} - ${e.size || ""}`.toUpperCase();
+        out += `A${x},${yBase + 8},0,2,1,1,N,"${model}"\n`;
+        out += `A${x},${yBase + 32},0,2,1,1,N,"${colorSize}"\n`;
+        out += `B${x},${yBase + 54},0,1B,1,1,35,N,"${code}"\n`;
+        out += `A${x},${yBase + 98},0,2,1,1,N,"${code}"\n`;
+      });
     });
     out += `P1\n`;
   }
@@ -626,6 +670,47 @@ function rowToStockItem(r) {
     if (nextProducts !== products) persistProducts(nextProducts);
   }
 
+  // Bipar uma peça em "Receber estoque": soma +1 no estoque daquele
+  // tamanho/cor e já cria a peça numerada correspondente (mesma lógica de
+  // rastreio da Listagem de itens), pra manter tudo consistente.
+  function scanReceiveStock(code) {
+    const match = matchScannedCode(code, products, stockItems);
+    if (!match) return { ok: false, message: "Código não reconhecido." };
+    const product = products.find((p) => p.id === match.productId);
+    const variant = product?.variants.find((v) => v.id === match.variantId);
+    if (!product || !variant) return { ok: false, message: "Produto não encontrado." };
+    const seq = product.nextItemSeq || 1;
+    const newStock = (variant.stock?.[match.size] || 0) + 1;
+    const nextProducts = products.map((p) => p.id !== product.id ? p : {
+      ...p,
+      nextItemSeq: seq + 1,
+      variants: p.variants.map((v) => v.id !== variant.id ? v : { ...v, stock: { ...v.stock, [match.size]: newStock } }),
+    });
+    persistProducts(nextProducts);
+    persistStockItems([...stockItems, {
+      id: uid("si_"), productId: product.id, variantId: variant.id, model: product.model,
+      sku: product.sku || product.model, color: variant.color, hex: variant.hex, size: match.size,
+      seq, orderId: null,
+    }]);
+    return { ok: true, message: `${product.model} · ${variant.color} · ${match.size} — estoque agora: ${newStock}` };
+  }
+
+  // Bipar uma peça em "Coletar pedido": confere se ela pertence ao pedido
+  // que está sendo separado e soma na contagem daquele item, sem mexer no
+  // estoque de novo (o abate já aconteceu quando o pedido foi finalizado).
+  function scanCollectOrder(order, code) {
+    const match = matchScannedCode(code, products, stockItems);
+    if (!match) return { ok: false, message: "Código não reconhecido." };
+    const idx = order.items.findIndex((it) => it.productId === match.productId && it.variantId === match.variantId && it.size === match.size);
+    if (idx === -1) return { ok: false, message: "Essa peça não faz parte deste pedido." };
+    const item = order.items[idx];
+    const collected = item.collected || 0;
+    if (collected >= item.qty) return { ok: false, message: `"${item.model}" (${item.color}, ${item.size}) já está completo.` };
+    const nextItems = order.items.map((it, i) => i === idx ? { ...it, collected: collected + 1 } : it);
+    persistOrders(orders.map((o) => o.id === order.id ? { ...o, items: nextItems } : o));
+    return { ok: true, message: `${item.model} · ${item.color} · ${item.size} — ${collected + 1} de ${item.qty}` };
+  }
+
   function updateOrderStatus(orderId, newStatus) {
     const order = orders.find((o) => o.id === orderId);
     if (!order) return;
@@ -843,7 +928,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -1479,11 +1564,12 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder }) {
   const [tab, setTab] = useState("produtos");
   const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
+    { id: "coleta", label: "Coleta e Estoque", icon: ScanBarcode },
     { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
     { id: "login-clientes", label: "Login de Clientes", icon: Users },
@@ -1505,6 +1591,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -1824,13 +1911,14 @@ function RepClientsPanel({ clients, setClients, session }) {
   );
 }
 
-const ORDER_STATUSES = ["Enviado à fábrica", "Crédito liberado", "Crédito bloqueado", "Pedido em preparação", "Pedido enviado", "Pedido cancelado"];
+const ORDER_STATUSES = ["Enviado à fábrica", "Crédito liberado", "Crédito bloqueado", "Pedido em preparação", "Pedido enviado", "Pedido completo", "Pedido cancelado"];
 const ORDER_STATUS_COLORS = {
   "Enviado à fábrica": { bg: "#E6F1FB", fg: "#0C447C" },
   "Crédito liberado": { bg: "#EAF3DE", fg: "#27500A" },
   "Crédito bloqueado": { bg: "#FCEBEB", fg: "#791F1F" },
   "Pedido em preparação": { bg: "#FAEEDA", fg: "#633806" },
   "Pedido enviado": { bg: "#EEEDFE", fg: "#3C3489" },
+  "Pedido completo": { bg: "#EAF3DE", fg: "#1F4E10" },
   "Pedido cancelado": { bg: "#F3DCDC", fg: "#6E2C2C" },
 };
 
@@ -1962,6 +2050,150 @@ function ClientForm({ initial, onCancel, onSave }) {
           <button onClick={() => onSave(c)} style={btnPrimary} disabled={!c.buyerName.trim()}><Check size={15} /> Salvar cliente</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ColetaEstoqueAdmin({ orders, scanReceiveStock, scanCollectOrder, updateStatus }) {
+  const [mode, setMode] = useState("menu");
+  const [activeOrder, setActiveOrder] = useState(null);
+
+  if (mode === "receber") return <ReceberEstoqueView scanReceiveStock={scanReceiveStock} onBack={() => setMode("menu")} />;
+  if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onBack={() => setMode("menu")} />;
+  if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} onBack={() => setMode("coletar-lista")} />;
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 16 }}>Coleta e Estoque</div>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <button onClick={() => setMode("receber")} style={{ flex: "1 1 240px", background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 24, textAlign: "left", cursor: "pointer" }}>
+          <ScanBarcode size={22} color={TOKENS.wine} />
+          <div style={{ fontSize: 15, fontWeight: 600, margin: "10px 0 4px" }}>Receber estoque</div>
+          <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>Bipe as peças que chegaram para somar no estoque.</div>
+        </button>
+        <button onClick={() => setMode("coletar-lista")} style={{ flex: "1 1 240px", background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 24, textAlign: "left", cursor: "pointer" }}>
+          <ScanBarcode size={22} color={TOKENS.wine} />
+          <div style={{ fontSize: 15, fontWeight: 600, margin: "10px 0 4px" }}>Coletar pedido</div>
+          <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>Escolha um pedido e bipe as peças para separar.</div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReceberEstoqueView({ scanReceiveStock, onBack }) {
+  const [code, setCode] = useState("");
+  const [log, setLog] = useState([]);
+  const inputRef = useRef();
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!code.trim()) return;
+    const result = scanReceiveStock(code.trim());
+    setLog((l) => [{ ...result, code: code.trim() }, ...l].slice(0, 40));
+    setCode("");
+    inputRef.current?.focus();
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0" }}>Receber estoque</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 14 }}>Bipe cada peça que chegou — cada leitura soma 1 unidade no estoque daquele tamanho/cor.</div>
+      <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
+        <button type="submit" style={btnPrimary}>Confirmar</button>
+      </form>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" }}>
+        {log.map((l, i) => (
+          <div key={i} style={{ padding: "8px 12px", borderRadius: 4, background: l.ok ? "#EAF3DE" : "#FCEBEB", color: l.ok ? "#27500A" : "#791F1F", fontSize: 12.5 }}>
+            <b style={{ fontFamily: "monospace" }}>{l.code}</b> — {l.message}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ColetarPedidoLista({ orders, onSelect, onBack }) {
+  const pending = orders.filter((o) => o.status !== "Pedido cancelado" && o.status !== "Pedido completo").slice().reverse();
+  return (
+    <div>
+      <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0" }}>Escolha o pedido para coletar</div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+        {pending.length === 0 && <div style={{ padding: 20, fontSize: 13, color: TOKENS.graphite }}>Nenhum pedido pendente de coleta.</div>}
+        {pending.map((o) => {
+          const total = o.items.reduce((a, it) => a + it.qty, 0);
+          const collected = o.items.reduce((a, it) => a + (it.collected || 0), 0);
+          return (
+            <button key={o.id} onClick={() => onSelect(o)} style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}`, background: "none", border: "none", cursor: "pointer" }}>
+              <div>
+                <div style={{ fontSize: 13.5, color: TOKENS.ink }}>{o.clientName}</div>
+                <div style={{ fontSize: 11, color: TOKENS.graphite }}>{new Date(o.date).toLocaleDateString("pt-BR")} · {o.status}</div>
+              </div>
+              <div style={{ fontSize: 12, color: TOKENS.graphite }}>{collected} de {total} coletados</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, updateStatus, onBack }) {
+  const order = orders.find((o) => o.id === initialOrder.id) || initialOrder;
+  const [code, setCode] = useState("");
+  const [feedback, setFeedback] = useState(null);
+  const inputRef = useRef();
+  useEffect(() => { inputRef.current?.focus(); }, [order.id]);
+
+  const allComplete = order.items.every((it) => (it.collected || 0) >= it.qty);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!code.trim()) return;
+    setFeedback(scanCollectOrder(order, code.trim()));
+    setCode("");
+    inputRef.current?.focus();
+  }
+
+  function confirm() {
+    updateStatus(order.id, "Pedido completo");
+    onBack();
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
+      <div style={{ margin: "12px 0" }}>
+        <div style={{ fontSize: 12, color: TOKENS.graphite }}>Coletando pedido de</div>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 19 }}>{order.clientName}</div>
+      </div>
+      <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
+        <button type="submit" style={btnPrimary}>OK</button>
+      </form>
+      {feedback && <div style={{ padding: "8px 12px", borderRadius: 4, marginBottom: 14, fontSize: 12.5, background: feedback.ok ? "#EAF3DE" : "#FCEBEB", color: feedback.ok ? "#27500A" : "#791F1F" }}>{feedback.message}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {order.items.map((it, i) => {
+          const collected = it.collected || 0;
+          const complete = collected >= it.qty;
+          return (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: `1px solid ${complete ? "#97C459" : "#F09595"}`, borderRadius: 8, padding: "10px 14px" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 3, background: complete ? "#EAF3DE" : "#FCEBEB", color: complete ? "#27500A" : "#791F1F", whiteSpace: "nowrap" }}>{complete ? "Completo" : "Faltando"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{it.model} · {it.color} · {it.size}</div>
+                <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{collected} de {it.qty} coletadas</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={confirm} disabled={!allComplete} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 16, opacity: allComplete ? 1 : 0.5, cursor: allComplete ? "pointer" : "not-allowed" }}>
+        <Check size={15} /> {allComplete ? "Confirmar coleta" : "Falta completar todos os itens"}
+      </button>
     </div>
   );
 }
