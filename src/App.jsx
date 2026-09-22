@@ -50,11 +50,13 @@ function rowToClient(r) {
 
 function orderToRow(o) {
   return { id: o.id, date: o.date, client_name: o.clientName, seller_name: o.sellerName, seller_role: o.sellerRole,
-    seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [] };
+    seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [],
+    collected_by: o.collectedBy || null, collected_at: o.collectedAt || null };
 }
 function rowToOrder(r) {
   return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
-    sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [] };
+    sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [],
+    collectedBy: r.collected_by, collectedAt: r.collected_at };
 }
 
 // Sincroniza uma tabela comparando a lista anterior com a nova, gravando só
@@ -705,13 +707,13 @@ function rowToStockItem(r) {
     if (idx === -1) return { ok: false, message: "Essa peça não faz parte deste pedido." };
     const item = order.items[idx];
     const collected = item.collected || 0;
-    if (collected >= item.qty) return { ok: false, message: `"${item.model}" (${item.color}, ${item.size}) já está completo.` };
+    if (collected >= item.qty) return { ok: false, alreadyComplete: true, message: `"${item.model}" (${item.color}, ${item.size}) já está completo.` };
     const nextItems = order.items.map((it, i) => i === idx ? { ...it, collected: collected + 1 } : it);
     persistOrders(orders.map((o) => o.id === order.id ? { ...o, items: nextItems } : o));
     return { ok: true, message: `${item.model} · ${item.color} · ${item.size} — ${collected + 1} de ${item.qty}` };
   }
 
-  function updateOrderStatus(orderId, newStatus) {
+  function updateOrderStatus(orderId, newStatus, extra) {
     const order = orders.find((o) => o.id === orderId);
     if (!order) return;
     if (order.status === "Pedido cancelado") return; // trava: pedido cancelado não pode mudar de status novamente
@@ -727,7 +729,7 @@ function rowToStockItem(r) {
       }
     }
     const next = orders.map((o) => o.id === orderId
-      ? { ...o, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
+      ? { ...o, ...extra, status: newStatus, statusLog: [...(o.statusLog || []), { status: newStatus, by: session.name || session.username, when: new Date().toISOString() }] }
       : o);
     persistOrders(next);
   }
@@ -928,7 +930,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -1564,7 +1566,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session }) {
   const [tab, setTab] = useState("produtos");
   const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
@@ -1591,7 +1593,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -1979,6 +1981,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
                   </select>
                 )}
                 {lastLog && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 4 }}>Alterado por {lastLog.by} · {new Date(lastLog.when).toLocaleString("pt-BR")}</div>}
+                {o.status === "Pedido completo" && o.collectedBy && <div style={{ fontSize: 10, color: TOKENS.ok, marginTop: 2 }}>Coletado por {o.collectedBy} · {o.collectedAt ? new Date(o.collectedAt).toLocaleString("pt-BR") : ""}</div>}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => downloadOrderPdf(o)} disabled={downloadingId === o.id} style={{ ...btnGhostSmall, whiteSpace: "nowrap" }}>
@@ -2054,13 +2057,13 @@ function ClientForm({ initial, onCancel, onSave }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, scanReceiveStock, scanCollectOrder, updateStatus }) {
+function ColetaEstoqueAdmin({ orders, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
 
   if (mode === "receber") return <ReceberEstoqueView scanReceiveStock={scanReceiveStock} onBack={() => setMode("menu")} />;
   if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onBack={() => setMode("menu")} />;
-  if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} onBack={() => setMode("coletar-lista")} />;
+  if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
 
   return (
     <div>
@@ -2093,7 +2096,7 @@ function ReceberEstoqueView({ scanReceiveStock, onBack }) {
     const result = scanReceiveStock(code.trim());
     setLog((l) => [{ ...result, code: code.trim() }, ...l].slice(0, 40));
     setCode("");
-    inputRef.current?.focus();
+    setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   return (
@@ -2142,7 +2145,7 @@ function ColetarPedidoLista({ orders, onSelect, onBack }) {
   );
 }
 
-function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, updateStatus, onBack }) {
+function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, updateStatus, session, onBack }) {
   const order = orders.find((o) => o.id === initialOrder.id) || initialOrder;
   const [code, setCode] = useState("");
   const [feedback, setFeedback] = useState(null);
@@ -2156,11 +2159,16 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
     if (!code.trim()) return;
     setFeedback(scanCollectOrder(order, code.trim()));
     setCode("");
-    inputRef.current?.focus();
+    // Um pequeno atraso garante que o campo já esteja liberado de novo pro
+    // próximo bip, mesmo logo depois de uma mensagem de erro aparecer.
+    setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   function confirm() {
-    updateStatus(order.id, "Pedido completo");
+    updateStatus(order.id, "Pedido completo", {
+      collectedBy: session?.name || session?.username,
+      collectedAt: new Date().toISOString(),
+    });
     onBack();
   }
 
@@ -2175,7 +2183,15 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
         <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
         <button type="submit" style={btnPrimary}>OK</button>
       </form>
-      {feedback && <div style={{ padding: "8px 12px", borderRadius: 4, marginBottom: 14, fontSize: 12.5, background: feedback.ok ? "#EAF3DE" : "#FCEBEB", color: feedback.ok ? "#27500A" : "#791F1F" }}>{feedback.message}</div>}
+      {feedback && (
+        feedback.alreadyComplete ? (
+          <div style={{ padding: "12px 14px", borderRadius: 4, marginBottom: 14, fontSize: 16, fontWeight: 700, background: "#FCEBEB", color: "#791F1F", border: "1px solid #F09595" }}>
+            ATENÇÃO. Já foi completo essa referência.
+          </div>
+        ) : (
+          <div style={{ padding: "8px 12px", borderRadius: 4, marginBottom: 14, fontSize: 12.5, background: feedback.ok ? "#EAF3DE" : "#FCEBEB", color: feedback.ok ? "#27500A" : "#791F1F" }}>{feedback.message}</div>
+        )
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {order.items.map((it, i) => {
           const collected = it.collected || 0;
