@@ -2120,27 +2120,46 @@ function ReceberEstoqueView({ scanReceiveStock, onBack }) {
 }
 
 function ColetarPedidoLista({ orders, onSelect, onBack }) {
-  const pending = orders.filter((o) => o.status !== "Pedido cancelado" && o.status !== "Pedido completo").slice().reverse();
+  const relevant = orders.filter((o) => o.status !== "Pedido cancelado").slice().reverse();
+  const withProgress = relevant.map((o) => {
+    const total = o.items.reduce((a, it) => a + it.qty, 0);
+    const collected = o.items.reduce((a, it) => a + (it.collected || 0), 0);
+    return { order: o, total, collected };
+  });
+  const novos = withProgress.filter((x) => x.order.status !== "Pedido completo" && x.collected === 0);
+  const emAberto = withProgress.filter((x) => x.order.status !== "Pedido completo" && x.collected > 0 && x.collected < x.total);
+  const coletados = withProgress.filter((x) => x.order.status === "Pedido completo");
+
+  function Section({ title, list, clickable }) {
+    return (
+      <div style={{ marginBottom: 22 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>{title} ({list.length})</div>
+        <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+          {list.length === 0 && <div style={{ padding: 16, fontSize: 12.5, color: TOKENS.graphite }}>Nenhum pedido aqui.</div>}
+          {list.map(({ order: o, total, collected }) => {
+            const Row = clickable ? "button" : "div";
+            return (
+              <Row key={o.id} onClick={clickable ? () => onSelect(o) : undefined} style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}`, background: "none", border: "none", cursor: clickable ? "pointer" : "default" }}>
+                <div>
+                  <div style={{ fontSize: 13.5, color: TOKENS.ink }}>{o.clientName}</div>
+                  <div style={{ fontSize: 11, color: TOKENS.graphite }}>{new Date(o.date).toLocaleDateString("pt-BR")} · {o.status}</div>
+                </div>
+                <div style={{ fontSize: 12, color: collected === total ? TOKENS.ok : TOKENS.graphite }}>{collected} de {total} coletados</div>
+              </Row>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
-      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0" }}>Escolha o pedido para coletar</div>
-      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
-        {pending.length === 0 && <div style={{ padding: 20, fontSize: 13, color: TOKENS.graphite }}>Nenhum pedido pendente de coleta.</div>}
-        {pending.map((o) => {
-          const total = o.items.reduce((a, it) => a + it.qty, 0);
-          const collected = o.items.reduce((a, it) => a + (it.collected || 0), 0);
-          return (
-            <button key={o.id} onClick={() => onSelect(o)} style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}`, background: "none", border: "none", cursor: "pointer" }}>
-              <div>
-                <div style={{ fontSize: 13.5, color: TOKENS.ink }}>{o.clientName}</div>
-                <div style={{ fontSize: 11, color: TOKENS.graphite }}>{new Date(o.date).toLocaleDateString("pt-BR")} · {o.status}</div>
-              </div>
-              <div style={{ fontSize: 12, color: TOKENS.graphite }}>{collected} de {total} coletados</div>
-            </button>
-          );
-        })}
-      </div>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0 18px" }}>Pedidos</div>
+      <Section title="Pedidos novos (nada coletado ainda)" list={novos} clickable />
+      <Section title="Pedidos em aberto (coleta em andamento)" list={emAberto} clickable />
+      <Section title="Pedidos coletados" list={coletados} clickable={false} />
     </div>
   );
 }
