@@ -224,27 +224,53 @@ function drawLabel(doc, x, y, model, color, size, code, barcodeDataUrl) {
 // Gera o comando EPL2 (texto puro, não PDF) para a Zebra GC420t — a própria
 // impressora entende esse texto direto, sem depender de escala/driver do
 // Windows. Calculado para etiqueta 33 x 21mm a 203dpi (8 pontos por mm).
+// Gera um CSV simples (Modelo, CorTamanho, Codigo) para ser usado como
+// fonte de dados no ZebraDesigner — mais confiável que mandar comando EPL
+// direto, já que o ZebraDesigner já sabe conversar certo com a impressora.
+function buildLabelsCsv(entries) {
+  const esc = (v) => `"${String(v || "").replace(/"/g, '""')}"`;
+  const rows = ["Modelo,CorTamanho,Codigo"];
+  entries.forEach((e) => { rows.push([e.model, `${e.color || ""} - ${e.size || ""}`, e.code].map(esc).join(",")); });
+  return rows.join("\r\n");
+}
+function downloadCsvFile(text, filename) {
+  const blob = new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // "gapDots" é a distância entre etiquetas na bobina — ajuste se a etiqueta
 // sair descolocada (cada etiqueta física normalmente tem uns 2-3mm de vão).
 function buildEplLabels(entries, gapDots = 24) {
   const DPMM = 8; // 203dpi = 8 pontos por mm
-  const W = Math.round(33 * DPMM);
-  const H = Math.round(21 * DPMM);
-  const margin = Math.round(1.5 * DPMM);
+  const LABEL_W = Math.round(33 * DPMM); // 264
+  const LABEL_H = Math.round(21 * DPMM); // 168
+  const COLS = 3; // a folha física tem 3 etiquetas lado a lado
+  const margin = 20; // mesma margem do teste que já imprimiu certinho
+  const rowWidth = LABEL_W * COLS + gapDots * (COLS - 1);
   let out = "";
-  entries.forEach((e) => {
-    const code = (e.code || "").replace(/["\\]/g, "");
-    const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24);
-    const colorSize = `${(e.color || "").replace(/["\\]/g, "")} - ${e.size || ""}`;
+  for (let i = 0; i < entries.length; i += COLS) {
+    const rowEntries = entries.slice(i, i + COLS);
     out += `N\n`;
-    out += `q${W}\n`;
-    out += `Q${H},${gapDots}\n`;
-    out += `A${margin},${Math.round(2 * DPMM)},0,1,1,1,N,"${model}"\n`;
-    out += `A${margin},${Math.round(5.5 * DPMM)},0,1,1,1,N,"${colorSize}"\n`;
-    out += `B${margin},${Math.round(8 * DPMM)},0,1B,2,2,${Math.round(7 * DPMM)},N,"${code}"\n`;
-    out += `A${margin},${Math.round(17.5 * DPMM)},0,1,1,1,N,"${code}"\n`;
+    out += `D12\n`;
+    out += `S2\n`;
+    out += `q${rowWidth}\n`;
+    out += `Q${LABEL_H},${gapDots}\n`;
+    rowEntries.forEach((e, col) => {
+      const x = col * (LABEL_W + gapDots) + margin;
+      const code = (e.code || "").replace(/["\\]/g, "");
+      const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24);
+      const colorSize = `${(e.color || "").replace(/["\\]/g, "")} - ${e.size || ""}`;
+      out += `A${x},8,0,2,1,1,N,"${model}"\n`;
+      out += `A${x},32,0,2,1,1,N,"${colorSize}"\n`;
+      out += `B${x},54,0,1B,1,1,35,N,"${code}"\n`;
+      out += `A${x},98,0,2,1,1,N,"${code}"\n`;
+    });
     out += `P1\n`;
-  });
+  }
   return out;
 }
 
@@ -2019,12 +2045,28 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
       alert(`Não foi possível gerar as etiquetas agora.\nDetalhe do erro: ${e?.message || e}`);
     } finally { setGeneratingLabels(false); }
   }
+  // Gera o arquivo .csv (fonte de dados para o ZebraDesigner) com as mesmas
+  // etiquetas — caminho mais confiável que o .epl, já que quem imprime de
+  // verdade é o próprio ZebraDesigner, que já sabe falar com a impressora.
+  function confirmGenerateCsv() {
+    const { product, variant } = labelModal;
+    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
+    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+    const entries = [];
+    SIZES.forEach((s) => {
+      const n = Math.max(0, Math.floor(Number(labelQty[s]) || 0));
+      for (let i = 0; i < n; i++) entries.push({ model: product.model, color: variant.color, size: s, code: `${baseCode}-${colorCode}-${s}` });
+    });
+    if (!entries.length) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
+    downloadCsvFile(buildLabelsCsv(entries), `etiquetas-${(product.model || "produto").replace(/\s+/g, "-").toLowerCase()}-${(variant.color || "cor").replace(/\s+/g, "-").toLowerCase()}.csv`);
+    setLabelModal(null);
+  }
   // Gera o arquivo .epl (comando direto para a Zebra GC420t) com as mesmas
   // etiquetas, para quem imprime direto na impressora em vez de via PDF.
   function confirmGenerateEpl() {
     const { product, variant } = labelModal;
-    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
-    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
+    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
     const entries = [];
     SIZES.forEach((s) => {
       const n = Math.max(0, Math.floor(Number(labelQty[s]) || 0));
@@ -2116,6 +2158,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
             </div>
             <div style={modalFooterStyle}>
               <button onClick={() => setLabelModal(null)} style={btnGhostSmall}>Cancelar</button>
+              <button onClick={confirmGenerateCsv} style={btnGhostSmall}>.csv (ZebraDesigner)</button>
               <button onClick={confirmGenerateEpl} style={btnGhostSmall}>.epl (Zebra)</button>
               <button onClick={confirmGenerateLabels} disabled={generatingLabels} style={btnPrimary}><Printer size={15} /> {generatingLabels ? "Gerando..." : "Gerar etiquetas (PDF)"}</button>
             </div>
