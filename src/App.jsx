@@ -695,12 +695,40 @@ function rowToStockItem(r) {
 
   // Funcionário lança um corte: fica pendente até admin/admincentral aprovar
   // — não soma em nenhum estoque ainda, é só um registro aguardando revisão.
-  function lancarCorte({ product, variant, size, qty }) {
-    const batch = {
-      id: uid("cb_"), productId: product.id, variantId: variant.id, model: product.model, color: variant.color,
-      size, qty, cutBy: session.name || session.username, cutAt: new Date().toISOString(), status: "pendente",
-    };
-    persistCutBatches([...cutBatches, batch]);
+  // Garante que existe o produto/cor pra registrar o corte: se já veio um
+  // modelo e cor existentes, só devolve eles; se for cor nova num modelo
+  // existente, ou um modelo totalmente novo, já cria no catálogo — mas com
+  // estoque de pronta entrega zerado, já que a peça ainda não foi costurada.
+  function garantirProdutoVariante({ productId, model, sku, category, description, price, costPrice, variantId, color, hex }) {
+    const zeroStock = { P: 0, M: 0, G: 0, GG: 0 };
+    if (productId && variantId) {
+      const product = products.find((p) => p.id === productId);
+      const variant = product?.variants.find((v) => v.id === variantId);
+      return { product, variant };
+    }
+    if (productId) {
+      const product = products.find((p) => p.id === productId);
+      const newVariant = { id: uid("v_"), color, hex, images: [], stock: { ...zeroStock } };
+      const nextProduct = { ...product, variants: [...product.variants, newVariant] };
+      persistProducts(products.map((p) => p.id === productId ? nextProduct : p));
+      return { product: nextProduct, variant: newVariant };
+    }
+    const newVariant = { id: uid("v_"), color, hex, images: [], stock: { ...zeroStock } };
+    const newProduct = { id: uid("p_"), model, sku, category, description, price, costPrice, variants: [newVariant], nextItemSeq: 1 };
+    persistProducts([newProduct, ...products]);
+    return { product: newProduct, variant: newVariant };
+  }
+
+  function lancarCorte({ product, variant, sizeQtyMap }) {
+    const now = new Date().toISOString();
+    const batches = Object.entries(sizeQtyMap)
+      .filter(([, qty]) => qty > 0)
+      .map(([size, qty]) => ({
+        id: uid("cb_"), productId: product.id, variantId: variant.id, model: product.model, color: variant.color,
+        size, qty, cutBy: session.name || session.username, cutAt: now, status: "pendente",
+      }));
+    if (batches.length) persistCutBatches([...cutBatches, ...batches]);
+    return batches;
   }
 
   // Admin aprova um corte pendente: marca aprovado e soma a quantidade na
@@ -1020,7 +1048,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -1663,7 +1691,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, aprovarCorte, rejeitarCorte }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte }) {
   const [tab, setTab] = useState("produtos");
   const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
@@ -1690,7 +1718,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} cutBatches={cutBatches} lancarCorte={lancarCorte} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -2154,7 +2182,7 @@ function ClientForm({ initial, onCancel, onSave }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, cutBatches, lancarCorte, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -2164,7 +2192,7 @@ function ColetaEstoqueAdmin({ orders, products, cutBatches, lancarCorte, aprovar
   if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onView={(o) => { setActiveOrder(o); setMode("ver-pedido"); }} onBack={() => setMode("menu")} />;
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
-  if (mode === "lancar-corte") return <LancarCorteView products={products} lancarCorte={lancarCorte} onBack={() => setMode("menu")} />;
+  if (mode === "lancar-corte") return <LancarCorteView products={products} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} onBack={() => setMode("menu")} />;
   if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
@@ -2396,62 +2424,188 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   );
 }
 
-function LancarCorteView({ products, lancarCorte, onBack }) {
-  const withVariants = products.filter((p) => p.variants && p.variants.length);
-  const [productId, setProductId] = useState(withVariants[0]?.id || "");
-  const product = withVariants.find((p) => p.id === productId);
+function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBack }) {
+  const [novoModelo, setNovoModelo] = useState(false);
+  const [productId, setProductId] = useState(products[0]?.id || "");
+  const product = products.find((p) => p.id === productId);
   const [variantId, setVariantId] = useState(product?.variants[0]?.id || "");
-  const variant = product?.variants.find((v) => v.id === variantId);
-  const [size, setSize] = useState("P");
-  const [qty, setQty] = useState(1);
-  const [sent, setSent] = useState(false);
+  const [novaCor, setNovaCor] = useState(!product?.variants?.length);
 
-  useEffect(() => { setVariantId(product?.variants[0]?.id || ""); }, [productId]);
+  const [model, setModel] = useState("");
+  const [sku, setSku] = useState("");
+  const [category, setCategory] = useState(CATEGORIES[0]);
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("");
+  const [costPrice, setCostPrice] = useState("");
+
+  const [colorName, setColorName] = useState("");
+  const [hex, setHex] = useState("#7A2E38");
+
+  const [sizeQty, setSizeQty] = useState({ P: 0, M: 0, G: 0, GG: 0 });
+  const [lastBatch, setLastBatch] = useState(null);
+
+  useEffect(() => {
+    if (!novoModelo) {
+      setVariantId(product?.variants[0]?.id || "");
+      setNovaCor(!product?.variants?.length);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productId, novoModelo]);
+
+  const totalQty = Object.values(sizeQty).reduce((a, b) => a + (Number(b) || 0), 0);
 
   function submit(e) {
     e.preventDefault();
-    if (!product || !variant || !qty) return;
-    lancarCorte({ product, variant, size, qty: Math.max(1, Math.floor(qty)) });
-    setSent(true);
-    setQty(1);
-    setTimeout(() => setSent(false), 2000);
+    if (!totalQty) { alert("Informe a quantidade cortada em pelo menos um tamanho."); return; }
+
+    let resolved;
+    if (novoModelo) {
+      if (!model.trim() || !colorName.trim()) { alert("Preencha o nome do modelo e da cor."); return; }
+      resolved = garantirProdutoVariante({ model: model.trim(), sku: sku.trim(), category, description, price, costPrice, color: colorName.trim(), hex });
+    } else if (novaCor) {
+      if (!colorName.trim()) { alert("Preencha o nome da cor."); return; }
+      resolved = garantirProdutoVariante({ productId, color: colorName.trim(), hex });
+    } else {
+      resolved = garantirProdutoVariante({ productId, variantId });
+    }
+    if (!resolved?.product || !resolved?.variant) { alert("Não foi possível identificar o produto/cor. Confira os dados."); return; }
+    const batches = lancarCorte({ product: resolved.product, variant: resolved.variant, sizeQtyMap: sizeQty });
+    setLastBatch({ product: resolved.product, variant: resolved.variant, batches });
+    setSizeQty({ P: 0, M: 0, G: 0, GG: 0 });
+    setColorName(""); setModel(""); setSku(""); setDescription(""); setPrice(""); setCostPrice("");
   }
 
+  if (lastBatch) return <CorteLancadoConfirmacao lastBatch={lastBatch} onNovoLancamento={() => setLastBatch(null)} onBack={onBack} />;
+
   return (
-    <div style={{ maxWidth: 460 }}>
+    <div style={{ maxWidth: 480 }}>
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0 4px" }}>Lançar corte</div>
       <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Registre o que foi cortado agora. Fica pendente até a aprovação de um administrador.</div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button type="button" onClick={() => setNovoModelo(false)} style={{ flex: 1, padding: "8px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: !novoModelo ? TOKENS.wine : "#fff", color: !novoModelo ? "#fff" : TOKENS.ink, fontSize: 12.5, cursor: "pointer" }}>Modelo existente</button>
+        <button type="button" onClick={() => setNovoModelo(true)} style={{ flex: 1, padding: "8px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: novoModelo ? TOKENS.wine : "#fff", color: novoModelo ? "#fff" : TOKENS.ink, fontSize: 12.5, cursor: "pointer" }}>Modelo novo</button>
+      </div>
+
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div>
-          <label style={labelStyle}>Produto</label>
-          <select value={productId} onChange={(e) => setProductId(e.target.value)} style={inputStyle}>
-            {withVariants.map((p) => <option key={p.id} value={p.id}>{p.model}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={labelStyle}>Cor</label>
-          <select value={variantId} onChange={(e) => setVariantId(e.target.value)} style={inputStyle}>
-            {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
-          </select>
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <div style={{ flex: 1 }}>
-            <label style={labelStyle}>Tamanho</label>
-            <select value={size} onChange={(e) => setSize(e.target.value)} style={inputStyle}>
-              {SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+        {!novoModelo ? (
+          <>
+            <div>
+              <label style={labelStyle}>Produto</label>
+              <select value={productId} onChange={(e) => setProductId(e.target.value)} style={inputStyle}>
+                {products.map((p) => <option key={p.id} value={p.id}>{p.model}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Cor</label>
+              <select value={novaCor ? "__nova__" : variantId} onChange={(e) => { if (e.target.value === "__nova__") { setNovaCor(true); } else { setNovaCor(false); setVariantId(e.target.value); } }} style={inputStyle}>
+                {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
+                <option value="__nova__">+ Nova cor para este modelo</option>
+              </select>
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <label style={labelStyle}>Nome do modelo</label>
+              <input value={model} onChange={(e) => setModel(e.target.value)} style={inputStyle} placeholder="Ex: Conjunto Aurora" />
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>SKU</label>
+                <input value={sku} onChange={(e) => setSku(e.target.value)} style={inputStyle} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Categoria</label>
+                <select value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle}>
+                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Descrição</label>
+              <input value={description} onChange={(e) => setDescription(e.target.value)} style={inputStyle} />
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Preço de venda</label>
+                <input value={price} onChange={(e) => setPrice(e.target.value)} style={inputStyle} placeholder="0,00" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Preço de custo</label>
+                <input value={costPrice} onChange={(e) => setCostPrice(e.target.value)} style={inputStyle} placeholder="0,00" />
+              </div>
+            </div>
+          </>
+        )}
+
+        {(novoModelo || novaCor) && (
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Nome da cor</label>
+              <input value={colorName} onChange={(e) => setColorName(e.target.value)} style={inputStyle} placeholder="Ex: Vinho" />
+            </div>
+            <input type="color" value={hex} onChange={(e) => setHex(e.target.value)} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
           </div>
-          <div style={{ flex: 1 }}>
-            <label style={labelStyle}>Quantidade cortada</label>
-            <input type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} style={inputStyle} />
+        )}
+
+        <div>
+          <label style={labelStyle}>Quantidade cortada por tamanho</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {SIZES.map((s) => (
+              <div key={s} style={{ flex: 1 }}>
+                <div style={{ fontSize: 10.5, textAlign: "center", color: TOKENS.graphite, marginBottom: 3 }}>{s}</div>
+                <input type="number" min={0} value={sizeQty[s]} onChange={(e) => setSizeQty((q) => ({ ...q, [s]: Math.max(0, Number(e.target.value) || 0) }))} style={{ ...inputStyle, textAlign: "center" }} />
+              </div>
+            ))}
           </div>
         </div>
-        <button type="submit" style={{ ...btnPrimary, justifyContent: "center", marginTop: 6 }} disabled={!product || !variant}>
-          <Scissors size={14} /> Lançar corte
+
+        <button type="submit" style={{ ...btnPrimary, justifyContent: "center", marginTop: 6 }}>
+          <Scissors size={14} /> Lançar corte ({totalQty} peça{totalQty === 1 ? "" : "s"})
         </button>
-        {sent && <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 12.5, padding: "8px 12px", borderRadius: 4 }}>Corte lançado, aguardando aprovação.</div>}
       </form>
+    </div>
+  );
+}
+
+function CorteLancadoConfirmacao({ lastBatch, onNovoLancamento, onBack }) {
+  const { product, variant, batches } = lastBatch;
+  function codeFor(size) {
+    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
+    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
+    return `${baseCode}-${colorCode}-${size}`;
+  }
+  const entries = batches.flatMap((b) => Array.from({ length: b.qty }, () => ({ model: product.model, color: variant.color, size: b.size, code: codeFor(b.size) })));
+  const totalQty = batches.reduce((a, b) => a + b.qty, 0);
+
+  async function baixarPdf() {
+    const blob = await buildItemLabelsPdfBlob(entries);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `corte-${product.model.replace(/\s+/g, "-").toLowerCase()}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  function baixarEpl() {
+    downloadEplFile(buildEplLabels(entries), `corte-${product.model.replace(/\s+/g, "-").toLowerCase()}.epl`);
+  }
+
+  return (
+    <div style={{ maxWidth: 480 }}>
+      <div style={{ background: "#EAF3DE", color: "#27500A", padding: "12px 14px", borderRadius: 4, fontSize: 13, marginBottom: 16 }}>
+        Corte lançado! {product.model} · {variant.color} — {totalQty} peça(s), aguardando aprovação.
+      </div>
+      <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 10 }}>Já pode imprimir as etiquetas para a produção colar nas peças enquanto costura:</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <button onClick={baixarPdf} style={btnGhostSmall}><Printer size={13} /> Etiquetas (PDF)</button>
+        <button onClick={baixarEpl} style={btnGhostSmall}>.epl (Zebra)</button>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={onNovoLancamento} style={btnPrimary}><Scissors size={14} /> Lançar outro corte</button>
+        <button onClick={onBack} style={btnGhostSmall}>Voltar ao menu</button>
+      </div>
     </div>
   );
 }
