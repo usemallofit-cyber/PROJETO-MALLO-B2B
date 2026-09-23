@@ -1620,8 +1620,9 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
             </div>
             {cart.length > 0 && (
               <div style={{ padding: "0 16px" }}>
-                <label style={labelStyle}>Observações (leitura obrigatória por quem recebe o pedido)</label>
-                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Ex: entregar embalado separado, cliente pediu urgência, etc." style={{ ...inputStyle, resize: "vertical", marginBottom: 12 }} />
+                <label style={labelStyle}>Observações</label>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Ex: entregar embalado separado, cliente pediu urgência, etc." style={{ ...inputStyle, resize: "vertical" }} />
+                <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 3, marginBottom: 12 }}>Leitura obrigatória por quem recebe o pedido.</div>
               </div>
             )}
             {cart.length > 0 && (
@@ -1733,6 +1734,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
     { id: "coleta", label: "Coleta e Estoque", icon: ScanBarcode },
+    { id: "relatorios-corte", label: "Relatórios Estoque e Corte", icon: BarChart3 },
     { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
     { id: "login-clientes", label: "Login de Clientes", icon: Users },
@@ -1755,6 +1757,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
       {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -2214,6 +2217,171 @@ function ClientForm({ initial, onCancel, onSave }) {
           <button onClick={onCancel} style={btnGhostSmall}>Cancelar</button>
           <button onClick={() => onSave(c)} style={btnPrimary} disabled={!c.buyerName.trim()}><Check size={15} /> Salvar cliente</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Junta tudo que uma administração precisa pra acompanhar corte e estoque:
+// quanto já foi cortado, o que está pendente, quem lança mais corte, quais
+// modelos puxam mais corte, e onde o estoque pronto está descolado do que
+// está em produção (sinal de gargalo).
+function computeCutReports(cutBatches, products) {
+  const porModelo = {};
+  const porTamanho = { P: 0, M: 0, G: 0, GG: 0 };
+  const porCortador = {};
+  let totalCortado = 0, totalPendente = 0, totalAprovado = 0, totalRejeitado = 0;
+
+  cutBatches.forEach((b) => {
+    totalCortado += b.qty;
+    if (b.status === "pendente") totalPendente += b.qty;
+    if (b.status === "aprovado") totalAprovado += b.qty;
+    if (b.status === "rejeitado") totalRejeitado += b.qty;
+    if (b.status !== "rejeitado") {
+      porModelo[b.model] = (porModelo[b.model] || 0) + b.qty;
+      porTamanho[b.size] = (porTamanho[b.size] || 0) + b.qty;
+      porCortador[b.cutBy] = (porCortador[b.cutBy] || 0) + b.qty;
+    }
+  });
+
+  const modelosRanking = Object.entries(porModelo).map(([model, qty]) => ({ model, qty })).sort((a, b) => b.qty - a.qty);
+  const cortadoresRanking = Object.entries(porCortador).map(([nome, qty]) => ({ nome, qty })).sort((a, b) => b.qty - a.qty);
+  const pendentes = cutBatches.filter((b) => b.status === "pendente").sort((a, b) => new Date(a.cutAt) - new Date(b.cutAt));
+
+  let totalProntaEstoque = 0, totalProducaoEstoque = 0;
+  const gargalos = [];
+  products.forEach((p) => {
+    (p.variants || []).forEach((v) => {
+      const pronta = SIZES.reduce((a, s) => a + (v.stock?.[s] || 0), 0);
+      const producao = SIZES.reduce((a, s) => a + (v.stockProducao?.[s] || 0), 0);
+      totalProntaEstoque += pronta;
+      totalProducaoEstoque += producao;
+      if (producao > 0) gargalos.push({ model: p.model, color: v.color, pronta, producao });
+    });
+  });
+  gargalos.sort((a, b) => b.producao - a.producao);
+
+  return { totalCortado, totalPendente, totalAprovado, totalRejeitado, modelosRanking, porTamanho, cortadoresRanking, pendentes, totalProntaEstoque, totalProducaoEstoque, gargalos };
+}
+
+function RelatoriosCorteAdmin({ cutBatches, products }) {
+  const r = useMemo(() => computeCutReports(cutBatches, products), [cutBatches, products]);
+  const maxModelo = Math.max(1, ...r.modelosRanking.map((m) => m.qty));
+  const maxTamanho = Math.max(1, ...Object.values(r.porTamanho));
+  const maxCortador = Math.max(1, ...r.cortadoresRanking.map((c) => c.qty));
+
+  function diasDesde(iso) { return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000); }
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 16 }}>Relatórios · Estoque e Corte</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 24 }}>
+        {[
+          { label: "Total já cortado", value: r.totalCortado, color: TOKENS.ink },
+          { label: "Pendente de aprovação", value: r.totalPendente, color: "#633806" },
+          { label: "Em produção (aprovado)", value: r.totalAprovado, color: "#633806" },
+          { label: "Pronta entrega (estoque)", value: r.totalProntaEstoque, color: "#27500A" },
+          { label: "Recusado", value: r.totalRejeitado, color: "#791F1F" },
+        ].map((c) => (
+          <div key={c.label} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{c.label}</div>
+            <div style={{ fontFamily: "Georgia, serif", fontSize: 24, color: c.color }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20, marginBottom: 24 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 10 }}>Modelos mais cortados</div>
+          {r.modelosRanking.length === 0 ? (
+            <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Nenhum corte lançado ainda.</div>
+          ) : (
+            <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+              {r.modelosRanking.slice(0, 8).map((m, i) => (
+                <div key={m.model} style={{ padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}>
+                    <span><b>{i + 1}.</b> {m.model}</span>
+                    <span style={{ color: TOKENS.graphite }}>{m.qty} peça(s)</span>
+                  </div>
+                  <div style={{ height: 5, background: TOKENS.ivorySoft, borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${(m.qty / maxModelo) * 100}%`, background: TOKENS.wine }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 10 }}>Corte por tamanho</div>
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            {SIZES.map((s) => (
+              <div key={s}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
+                  <span>{s}</span><span style={{ color: TOKENS.graphite }}>{r.porTamanho[s]}</span>
+                </div>
+                <div style={{ height: 5, background: TOKENS.ivorySoft, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${(r.porTamanho[s] / maxTamanho) * 100}%`, background: "#BA7517" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, margin: "18px 0 10px" }}>Quem mais lança corte</div>
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            {r.cortadoresRanking.length === 0 && <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Nenhum corte lançado ainda.</div>}
+            {r.cortadoresRanking.slice(0, 6).map((c) => (
+              <div key={c.nome}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
+                  <span>{c.nome}</span><span style={{ color: TOKENS.graphite }}>{c.qty}</span>
+                </div>
+                <div style={{ height: 5, background: TOKENS.ivorySoft, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${(c.qty / maxCortador) * 100}%`, background: TOKENS.ink }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 10 }}>Cortes pendentes de aprovação ({r.pendentes.length})</div>
+        {r.pendentes.length === 0 ? (
+          <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Nenhum corte esperando aprovação. 🎉</div>
+        ) : (
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+            {r.pendentes.map((b) => {
+              const dias = diasDesde(b.cutAt);
+              return (
+                <div key={b.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}`, fontSize: 12.5 }}>
+                  <span>{b.model} · {b.color} · {b.size} — {b.qty} peça(s) · lançado por {b.cutBy}</span>
+                  <span style={{ color: dias >= 3 ? "#A5453F" : TOKENS.graphite, fontWeight: dias >= 3 ? 600 : 400 }}>{dias === 0 ? "hoje" : `há ${dias} dia${dias === 1 ? "" : "s"}`}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 10 }}>Estoque em produção aguardando confirmação (por peça, do maior pro menor)</div>
+        {r.gargalos.length === 0 ? (
+          <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Nada em produção no momento — tudo que foi aprovado já virou pronta entrega.</div>
+        ) : (
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+            <div style={{ display: "flex", padding: "8px 14px", fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: `1px solid ${TOKENS.line}` }}>
+              <span style={{ flex: 1 }}>Modelo · cor</span><span style={{ width: 90, textAlign: "right" }}>Pronta</span><span style={{ width: 110, textAlign: "right" }}>Em produção</span>
+            </div>
+            {r.gargalos.map((g, i) => (
+              <div key={i} style={{ display: "flex", padding: "9px 14px", fontSize: 12.5, borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+                <span style={{ flex: 1 }}>{g.model} · {g.color}</span>
+                <span style={{ width: 90, textAlign: "right", color: g.pronta === 0 ? "#A5453F" : TOKENS.graphite }}>{g.pronta}</span>
+                <span style={{ width: 110, textAlign: "right", color: "#633806", fontWeight: 600 }}>{g.producao}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
