@@ -51,12 +51,12 @@ function rowToClient(r) {
 function orderToRow(o) {
   return { id: o.id, date: o.date, client_name: o.clientName, seller_name: o.sellerName, seller_role: o.sellerRole,
     seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [],
-    collected_by: o.collectedBy || null, collected_at: o.collectedAt || null };
+    collected_by: o.collectedBy || null, collected_at: o.collectedAt || null, note: o.note || null };
 }
 function rowToOrder(r) {
   return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
     sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [],
-    collectedBy: r.collected_by, collectedAt: r.collected_at };
+    collectedBy: r.collected_by, collectedAt: r.collected_at, note: r.note };
 }
 
 function cutBatchToRow(c) {
@@ -393,7 +393,7 @@ async function buildItemLabelsPdfBlob(entries) {
 // de uma lista de itens de pedido. Usado tanto no carrinho do cliente quanto na
 // aba Pedidos do painel — troca window.print() (que duplicava página) por um PDF
 // de verdade, que também pode ser anexado no compartilhamento do WhatsApp.
-async function buildOrderPdfBlob(items, session, showPrice, client) {
+async function buildOrderPdfBlob(items, session, showPrice, client, note) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -410,6 +410,15 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
     doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(140, 58, 58);
     doc.text(`Cliente: ${client.buyerName}${client.cnpj ? "  CNPJ: " + client.cnpj : ""}`, marginX, y);
     y += 16;
+  }
+  if (note) {
+    const noteLines = doc.splitTextToSize(`Observações: ${note}`, pageWidth - marginX * 2 - 16);
+    const boxH = noteLines.length * 12 + 10;
+    doc.setFillColor(250, 238, 218);
+    doc.rect(marginX, y - 10, pageWidth - marginX * 2, boxH, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(99, 56, 6);
+    doc.text(noteLines, marginX + 8, y);
+    y += boxH + 8;
   }
   doc.setDrawColor(220, 210, 190);
   doc.line(marginX, y, pageWidth - marginX, y);
@@ -995,7 +1004,7 @@ function rowToStockItem(r) {
   function removeCartItem(cartItemId) { persistCart(cart.filter((c) => c.cartItemId !== cartItemId)); }
   function clearCart() { persistCart([]); setSelectedClient(null); }
 
-  async function finalizeOrder() {
+  async function finalizeOrder(note) {
     if (!cart.length || !session) return;
     // Confere a disponibilidade agora mesmo, pro aviso ser rápido — o abate
     // de verdade acontece no servidor (função finalize-order), que confere
@@ -1018,7 +1027,7 @@ function rowToStockItem(r) {
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId, stockType: c.stockType || "pronta" };
     });
     const { data, error } = await withRetry(() => supabase.functions.invoke("finalize-order", {
-      body: { clientName: selectedClient?.buyerName || session.name || session.username, items },
+      body: { clientName: selectedClient?.buyerName || session.name || session.username, items, note: note || "" },
     }));
     if (error || data?.error) {
       if (data?.shortages?.length) {
@@ -1447,6 +1456,7 @@ function buildOrderText(cart, session, showPrice, client) {
 }
 
 function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeCartItem, clearCart, settings, session, clients, needsClientSelect, selectedClient, setSelectedClient, onFinalizeOrder }) {
+  const [note, setNote] = useState("");
   const [step, setStep] = useState("list");
   const [downloading, setDownloading] = useState(false);
   const [sendingWhats, setSendingWhats] = useState(false);
@@ -1463,6 +1473,9 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
   const qtyPronta = cart.filter((c) => c.stockType !== "producao").reduce((a, c) => a + c.qty, 0);
   const qtyProducao = cart.filter((c) => c.stockType === "producao").reduce((a, c) => a + c.qty, 0);
   const qtyTotal = qtyPronta + qtyProducao;
+  const valorPronta = cart.filter((c) => c.stockType !== "producao").reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
+  const valorProducao = cart.filter((c) => c.stockType === "producao").reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
+  const MIN_PEDIDO = 2500;
   const orderText = useMemo(() => buildOrderText(displayCart, session, showPrice, displayClient), [displayCart, session, showPrice, displayClient]);
   const orderEmail = (settings.orderEmail || "").trim();
   const mailHref = `mailto:${orderEmail}?subject=${encodeURIComponent(`Novo pedido - ${session.name || session.username}`)}&body=${encodeURIComponent(orderText)}`;
@@ -1494,7 +1507,7 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
     setDownloading(true);
     setSendError("");
     try {
-      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient);
+      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient, finalizedSnapshot?.note);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = pdfFileName;
@@ -1532,7 +1545,7 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
     if (!hasWhats) return;
     setSendingWhats(true);
     try {
-      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient);
+      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient, finalizedSnapshot?.note);
       const file = new File([blob], pdfFileName, { type: "application/pdf" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: "Pedido", text: orderText });
@@ -1606,15 +1619,24 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
               })}
             </div>
             {cart.length > 0 && (
-              <div style={{ padding: 16, borderTop: `1px solid ${TOKENS.line}`, background: "#fff" }}>
+              <div style={{ padding: "0 16px" }}>
+                <label style={labelStyle}>Observações (leitura obrigatória por quem recebe o pedido)</label>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Ex: entregar embalado separado, cliente pediu urgência, etc." style={{ ...inputStyle, resize: "vertical", marginBottom: 12 }} />
+              </div>
+            )}
+            {cart.length > 0 && (
+              <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${TOKENS.line}`, background: "#fff", paddingTop: 16 }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 12, fontSize: 12, color: TOKENS.graphite }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Pronta entrega</span><span>{qtyPronta} peça{qtyPronta === 1 ? "" : "s"}</span></div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Em produção</span><span>{qtyProducao} peça{qtyProducao === 1 ? "" : "s"}</span></div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, color: TOKENS.ink, paddingTop: 3, borderTop: `1px dashed ${TOKENS.line}` }}><span>Total de peças</span><span>{qtyTotal}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Pronta entrega</span><span>{qtyPronta} peça{qtyPronta === 1 ? "" : "s"}{showPrice && <span style={{ color: valorPronta >= MIN_PEDIDO ? "#27500A" : "#A5453F", fontWeight: 600 }}> · R$ {formatBRL(valorPronta)}</span>}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Em produção</span><span>{qtyProducao} peça{qtyProducao === 1 ? "" : "s"}{showPrice && <span style={{ color: valorProducao >= MIN_PEDIDO ? "#27500A" : "#A5453F", fontWeight: 600 }}> · R$ {formatBRL(valorProducao)}</span>}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, color: TOKENS.ink, paddingTop: 3, borderTop: `1px dashed ${TOKENS.line}` }}>
+                    <span>Total de peças</span>
+                    <span>{qtyTotal}{showPrice && <span style={{ color: total >= MIN_PEDIDO ? "#27500A" : "#A5453F" }}> · R$ {formatBRL(total)}</span>}</span>
+                  </div>
                 </div>
                 {showPrice && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 15 }}><span>Total</span><b style={{ color: TOKENS.wine, fontFamily: "Georgia, serif", fontSize: 19 }}>R$ {formatBRL(total)}</b></div>}
                 {hasInsufficientStock && <div style={{ fontSize: 11.5, color: "#A5453F", marginBottom: 8, textAlign: "center" }}>Ajuste os itens em vermelho (estoque insuficiente) antes de finalizar.</div>}
-                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient }); onFinalizeOrder(); setStep("finalize"); }} disabled={!clientReady || hasInsufficientStock} title={!clientReady ? "Selecione um cliente para este pedido" : hasInsufficientStock ? "Ajuste os itens em vermelho antes de finalizar" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (clientReady && !hasInsufficientStock) ? 1 : 0.5, cursor: (clientReady && !hasInsufficientStock) ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
+                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient, note }); onFinalizeOrder(note); setStep("finalize"); }} disabled={!clientReady || hasInsufficientStock} title={!clientReady ? "Selecione um cliente para este pedido" : hasInsufficientStock ? "Ajuste os itens em vermelho antes de finalizar" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (clientReady && !hasInsufficientStock) ? 1 : 0.5, cursor: (clientReady && !hasInsufficientStock) ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
                 {!clientReady && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 6, textAlign: "center" }}>Selecione o cliente acima para continuar.</div>}
                 <button onClick={() => { if (confirm("Esvaziar o carrinho?")) clearCart(); }} style={{ ...btnGhostSmall, width: "100%", justifyContent: "center", marginTop: 8 }}>Esvaziar carrinho</button>
               </div>
@@ -2072,7 +2094,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
   async function downloadOrderPdf(o) {
     setDownloadingId(o.id);
     try {
-      const blob = await buildOrderPdfBlob(o.items, { name: o.sellerName, username: o.sellerUsername }, true, { buyerName: o.clientName });
+      const blob = await buildOrderPdfBlob(o.items, { name: o.sellerName, username: o.sellerUsername }, true, { buyerName: o.clientName }, o.note);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `pedido-${o.clientName.replace(/\s+/g, "-").toLowerCase()}-${o.id}.pdf`;
@@ -2120,6 +2142,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
                   </select>
                 )}
                 {lastLog && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 4 }}>Alterado por {lastLog.by} · {new Date(lastLog.when).toLocaleString("pt-BR")}</div>}
+                {o.note && <div style={{ fontSize: 11, color: "#633806", background: "#FAEEDA", padding: "4px 8px", borderRadius: 3, marginTop: 5 }}><b>Obs:</b> {o.note}</div>}
                 {o.status === "Pedido completo" && o.collectedBy && <div style={{ fontSize: 10, color: TOKENS.ok, marginTop: 2 }}>Coletado por {o.collectedBy} · {o.collectedAt ? new Date(o.collectedAt).toLocaleString("pt-BR") : ""}</div>}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
@@ -2332,6 +2355,7 @@ function PedidoColetadoDetalhe({ order, onBack }) {
           Coletado por {order.collectedBy}{order.collectedAt ? ` · ${new Date(order.collectedAt).toLocaleString("pt-BR")}` : ""}
         </div>
       )}
+      {order.note && <div style={{ fontSize: 12.5, color: "#633806", background: "#FAEEDA", padding: "8px 12px", borderRadius: 4, marginBottom: 18 }}><b>Observações:</b> {order.note}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {order.items.map((it, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "10px 14px" }}>
@@ -2382,7 +2406,7 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   async function printOrder() {
     setPrinting(true);
     try {
-      const blob = await buildOrderPdfBlob(order.items, { name: order.sellerName, username: order.sellerUsername }, true, { buyerName: order.clientName });
+      const blob = await buildOrderPdfBlob(order.items, { name: order.sellerName, username: order.sellerUsername }, true, { buyerName: order.clientName }, order.note);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `pedido-${order.clientName.replace(/\s+/g, "-").toLowerCase()}-${order.id}.pdf`;
@@ -2403,6 +2427,7 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
         </div>
         <button onClick={printOrder} disabled={printing} style={btnGhostSmall}><Printer size={13} /> {printing ? "Gerando..." : "Imprimir pedido"}</button>
       </div>
+      {order.note && <div style={{ fontSize: 12.5, color: "#633806", background: "#FAEEDA", padding: "8px 12px", borderRadius: 4, marginBottom: 10 }}><b>Observações:</b> {order.note}</div>}
       <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
         <button type="submit" style={btnPrimary}>OK</button>
