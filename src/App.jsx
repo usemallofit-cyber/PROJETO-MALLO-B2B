@@ -1460,6 +1460,9 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
   const displayCart = step === "finalize" && finalizedSnapshot ? finalizedSnapshot.items : cart;
   const displayClient = step === "finalize" && finalizedSnapshot ? finalizedSnapshot.client : selectedClient;
   const total = cart.reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
+  const qtyPronta = cart.filter((c) => c.stockType !== "producao").reduce((a, c) => a + c.qty, 0);
+  const qtyProducao = cart.filter((c) => c.stockType === "producao").reduce((a, c) => a + c.qty, 0);
+  const qtyTotal = qtyPronta + qtyProducao;
   const orderText = useMemo(() => buildOrderText(displayCart, session, showPrice, displayClient), [displayCart, session, showPrice, displayClient]);
   const orderEmail = (settings.orderEmail || "").trim();
   const mailHref = `mailto:${orderEmail}?subject=${encodeURIComponent(`Novo pedido - ${session.name || session.username}`)}&body=${encodeURIComponent(orderText)}`;
@@ -1604,6 +1607,11 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
             </div>
             {cart.length > 0 && (
               <div style={{ padding: 16, borderTop: `1px solid ${TOKENS.line}`, background: "#fff" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 12, fontSize: 12, color: TOKENS.graphite }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Pronta entrega</span><span>{qtyPronta} peça{qtyPronta === 1 ? "" : "s"}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Em produção</span><span>{qtyProducao} peça{qtyProducao === 1 ? "" : "s"}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, color: TOKENS.ink, paddingTop: 3, borderTop: `1px dashed ${TOKENS.line}` }}><span>Total de peças</span><span>{qtyTotal}</span></div>
+                </div>
                 {showPrice && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 15 }}><span>Total</span><b style={{ color: TOKENS.wine, fontFamily: "Georgia, serif", fontSize: 19 }}>R$ {formatBRL(total)}</b></div>}
                 {hasInsufficientStock && <div style={{ fontSize: 11.5, color: "#A5453F", marginBottom: 8, textAlign: "center" }}>Ajuste os itens em vermelho (estoque insuficiente) antes de finalizar.</div>}
                 <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient }); onFinalizeOrder(); setStep("finalize"); }} disabled={!clientReady || hasInsufficientStock} title={!clientReady ? "Selecione um cliente para este pedido" : hasInsufficientStock ? "Ajuste os itens em vermelho antes de finalizar" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (clientReady && !hasInsufficientStock) ? 1 : 0.5, cursor: (clientReady && !hasInsufficientStock) ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
