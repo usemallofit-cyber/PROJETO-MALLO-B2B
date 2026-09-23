@@ -1196,20 +1196,20 @@ function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
         {p.category && <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: TOKENS.wine, marginBottom: 3 }}>{p.category}</div>}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
           <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink }}>{p.model}</div>
-          {!variant.color && showPrice && <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.wine, whiteSpace: "nowrap" }}>R$ {p.price}</div>}
+          {!(p.variants && p.variants.length) && showPrice && <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.wine, whiteSpace: "nowrap" }}>R$ {p.price}</div>}
         </div>
         {p.sku && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 1 }}>SKU: {p.sku}</div>}
         <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginTop: 4, lineHeight: 1.4, minHeight: 32 }}>{p.description}</div>
 
-        {variant.color && (
+        {p.variants && p.variants.length > 0 && (
           <div style={{ marginTop: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-              <div style={{ fontSize: 10.5, color: TOKENS.graphite }}>Cor: <b style={{ color: TOKENS.ink }}>{variant.color}</b></div>
+              <div style={{ fontSize: 10.5, color: TOKENS.graphite }}>Cor: <b style={{ color: TOKENS.ink }}>{variant.color || "—"}</b></div>
               {showPrice && <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.wine }}>R$ {p.price}</div>}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               {variants.map((v, i) => (
-                <button key={v.id} onClick={() => setVIdx(i)} title={v.color} style={{
+                <button key={v.id} onClick={() => setVIdx(i)} title={v.color || "(sem nome)"} style={{
                   width: 22, height: 22, borderRadius: "50%", background: v.hex, cursor: "pointer",
                   border: i === vIdx ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}`,
                   boxShadow: i === vIdx ? "0 0 0 2px #fff inset" : "none", outline: "none",
