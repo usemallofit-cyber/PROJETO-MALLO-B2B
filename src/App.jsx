@@ -699,23 +699,29 @@ function rowToStockItem(r) {
   // modelo e cor existentes, só devolve eles; se for cor nova num modelo
   // existente, ou um modelo totalmente novo, já cria no catálogo — mas com
   // estoque de pronta entrega zerado, já que a peça ainda não foi costurada.
-  function garantirProdutoVariante({ productId, model, sku, category, description, price, costPrice, variantId, color, hex }) {
+  async function garantirProdutoVariante({ productId, model, sku, category, description, price, costPrice, variantId, color, hex, images }) {
     const zeroStock = { P: 0, M: 0, G: 0, GG: 0 };
     if (productId && variantId) {
       const product = products.find((p) => p.id === productId);
       const variant = product?.variants.find((v) => v.id === variantId);
+      if (images && JSON.stringify(images) !== JSON.stringify(variant?.images || [])) {
+        const nextVariants = product.variants.map((v) => v.id === variantId ? { ...v, images } : v);
+        const nextProduct = { ...product, variants: nextVariants };
+        await persistProducts(products.map((p) => p.id === productId ? nextProduct : p));
+        return { product: nextProduct, variant: nextVariants.find((v) => v.id === variantId) };
+      }
       return { product, variant };
     }
     if (productId) {
       const product = products.find((p) => p.id === productId);
-      const newVariant = { id: uid("v_"), color, hex, images: [], stock: { ...zeroStock } };
+      const newVariant = { id: uid("v_"), color, hex, images: images || [], stock: { ...zeroStock } };
       const nextProduct = { ...product, variants: [...product.variants, newVariant] };
-      persistProducts(products.map((p) => p.id === productId ? nextProduct : p));
+      await persistProducts(products.map((p) => p.id === productId ? nextProduct : p));
       return { product: nextProduct, variant: newVariant };
     }
-    const newVariant = { id: uid("v_"), color, hex, images: [], stock: { ...zeroStock } };
+    const newVariant = { id: uid("v_"), color, hex, images: images || [], stock: { ...zeroStock } };
     const newProduct = { id: uid("p_"), model, sku, category, description, price, costPrice, variants: [newVariant], nextItemSeq: 1 };
-    persistProducts([newProduct, ...products]);
+    await persistProducts([newProduct, ...products]);
     return { product: newProduct, variant: newVariant };
   }
 
@@ -2440,39 +2446,54 @@ function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBac
 
   const [colorName, setColorName] = useState("");
   const [hex, setHex] = useState("#7A2E38");
+  const [images, setImages] = useState([]);
+  const fileRef = useRef();
 
   const [sizeQty, setSizeQty] = useState({ P: 0, M: 0, G: 0, GG: 0 });
   const [lastBatch, setLastBatch] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!novoModelo) {
-      setVariantId(product?.variants[0]?.id || "");
+      const firstVariant = product?.variants[0];
+      setVariantId(firstVariant?.id || "");
       setNovaCor(!product?.variants?.length);
+      setImages(firstVariant?.images || []);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId, novoModelo]);
 
   const totalQty = Object.values(sizeQty).reduce((a, b) => a + (Number(b) || 0), 0);
 
-  function submit(e) {
+  async function addImages(fileList) {
+    const files = Array.from(fileList).slice(0, 4 - images.length);
+    const dataUrls = await Promise.all(files.map((f) => fileToCompressedDataUrl(f)));
+    setImages((imgs) => [...imgs, ...dataUrls]);
+  }
+  function removeImage(idx) { setImages((imgs) => imgs.filter((_, i) => i !== idx)); }
+
+  async function submit(e) {
     e.preventDefault();
     if (!totalQty) { alert("Informe a quantidade cortada em pelo menos um tamanho."); return; }
 
+    setSaving(true);
     let resolved;
-    if (novoModelo) {
-      if (!model.trim() || !colorName.trim()) { alert("Preencha o nome do modelo e da cor."); return; }
-      resolved = garantirProdutoVariante({ model: model.trim(), sku: sku.trim(), category, description, price, costPrice, color: colorName.trim(), hex });
-    } else if (novaCor) {
-      if (!colorName.trim()) { alert("Preencha o nome da cor."); return; }
-      resolved = garantirProdutoVariante({ productId, color: colorName.trim(), hex });
-    } else {
-      resolved = garantirProdutoVariante({ productId, variantId });
-    }
+    try {
+      if (novoModelo) {
+        if (!model.trim() || !colorName.trim()) { alert("Preencha o nome do modelo e da cor."); return; }
+        resolved = await garantirProdutoVariante({ model: model.trim(), sku: sku.trim(), category, description, price, costPrice, color: colorName.trim(), hex, images });
+      } else if (novaCor) {
+        if (!colorName.trim()) { alert("Preencha o nome da cor."); return; }
+        resolved = await garantirProdutoVariante({ productId, color: colorName.trim(), hex, images });
+      } else {
+        resolved = await garantirProdutoVariante({ productId, variantId, images });
+      }
+    } finally { setSaving(false); }
     if (!resolved?.product || !resolved?.variant) { alert("Não foi possível identificar o produto/cor. Confira os dados."); return; }
     const batches = lancarCorte({ product: resolved.product, variant: resolved.variant, sizeQtyMap: sizeQty });
     setLastBatch({ product: resolved.product, variant: resolved.variant, batches });
     setSizeQty({ P: 0, M: 0, G: 0, GG: 0 });
-    setColorName(""); setModel(""); setSku(""); setDescription(""); setPrice(""); setCostPrice("");
+    setColorName(""); setModel(""); setSku(""); setDescription(""); setPrice(""); setCostPrice(""); setImages([]);
   }
 
   if (lastBatch) return <CorteLancadoConfirmacao lastBatch={lastBatch} onNovoLancamento={() => setLastBatch(null)} onBack={onBack} />;
@@ -2499,7 +2520,10 @@ function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBac
             </div>
             <div>
               <label style={labelStyle}>Cor</label>
-              <select value={novaCor ? "__nova__" : variantId} onChange={(e) => { if (e.target.value === "__nova__") { setNovaCor(true); } else { setNovaCor(false); setVariantId(e.target.value); } }} style={inputStyle}>
+              <select value={novaCor ? "__nova__" : variantId} onChange={(e) => {
+                if (e.target.value === "__nova__") { setNovaCor(true); setImages([]); }
+                else { setNovaCor(false); setVariantId(e.target.value); setImages(product?.variants.find((v) => v.id === e.target.value)?.images || []); }
+              }} style={inputStyle}>
                 {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
                 <option value="__nova__">+ Nova cor para este modelo</option>
               </select>
@@ -2551,6 +2575,25 @@ function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBac
         )}
 
         <div>
+          <label style={labelStyle}>Fotos desta cor (até 4 · a 1ª é a principal)</label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {images.map((img, i) => (
+              <div key={i} style={{ position: "relative", width: 66, height: 84 }}>
+                <img src={img} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 3, border: i === 0 ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}` }} />
+                {i === 0 && <span style={{ position: "absolute", bottom: 2, left: 2, background: TOKENS.wine, color: "#fff", fontSize: 8, padding: "1px 4px", borderRadius: 2 }}>Principal</span>}
+                <button type="button" onClick={() => removeImage(i)} style={{ position: "absolute", top: -6, right: -6, background: TOKENS.wine, color: "#fff", border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 11 }}>×</button>
+              </div>
+            ))}
+            {images.length < 4 && (
+              <button type="button" onClick={() => fileRef.current.click()} style={{ width: 66, height: 84, border: `1px dashed ${TOKENS.line}`, borderRadius: 3, background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", color: TOKENS.graphite, gap: 4 }}>
+                <Upload size={14} /><span style={{ fontSize: 9.5 }}>Subir</span>
+              </button>
+            )}
+            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => e.target.files.length && addImages(e.target.files)} />
+          </div>
+        </div>
+
+        <div>
           <label style={labelStyle}>Quantidade cortada por tamanho</label>
           <div style={{ display: "flex", gap: 8 }}>
             {SIZES.map((s) => (
@@ -2562,8 +2605,8 @@ function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBac
           </div>
         </div>
 
-        <button type="submit" style={{ ...btnPrimary, justifyContent: "center", marginTop: 6 }}>
-          <Scissors size={14} /> Lançar corte ({totalQty} peça{totalQty === 1 ? "" : "s"})
+        <button type="submit" disabled={saving} style={{ ...btnPrimary, justifyContent: "center", marginTop: 6 }}>
+          {saving ? "Salvando..." : <><Scissors size={14} /> Lançar corte ({totalQty} peça{totalQty === 1 ? "" : "s"})</>}
         </button>
       </form>
     </div>
