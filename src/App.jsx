@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -57,6 +57,17 @@ function rowToOrder(r) {
   return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
     sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [],
     collectedBy: r.collected_by, collectedAt: r.collected_at };
+}
+
+function cutBatchToRow(c) {
+  return { id: c.id, product_id: c.productId, variant_id: c.variantId, model: c.model, color: c.color,
+    size: c.size, qty: c.qty, cut_by: c.cutBy, cut_at: c.cutAt, status: c.status,
+    approved_by: c.approvedBy || null, approved_at: c.approvedAt || null };
+}
+function rowToCutBatch(r) {
+  return { id: r.id, productId: r.product_id, variantId: r.variant_id, model: r.model, color: r.color,
+    size: r.size, qty: r.qty, cutBy: r.cut_by, cutAt: r.cut_at, status: r.status,
+    approvedBy: r.approved_by, approvedAt: r.approved_at };
 }
 
 // Sincroniza uma tabela comparando a lista anterior com a nova, gravando só
@@ -404,7 +415,7 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
   doc.line(marginX, y, pageWidth - marginX, y);
   y += 22;
 
-  for (const c of items) {
+  async function drawItem(c) {
     if (y > 760) { doc.addPage(); y = 46; }
     if (c.image) {
       try {
@@ -426,6 +437,31 @@ async function buildOrderPdfBlob(items, session, showPrice, client) {
     }
     y += 68;
   }
+
+  function drawSectionHeader(label, color) {
+    if (y > 740) { doc.addPage(); y = 46; }
+    doc.setFillColor(...color);
+    doc.rect(marginX, y - 12, pageWidth - marginX * 2, 20, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(255, 255, 255);
+    doc.text(label, marginX + 8, y + 2);
+    y += 24;
+  }
+
+  // Separa os itens do carrinho/pedido em duas seções — pronta entrega e em
+  // produção (corte já aprovado, ainda sendo costurado) — pra ficar claro
+  // pra quem recebe o pedido o que sai na hora e o que ainda tem prazo.
+  const pronta = items.filter((c) => (c.stockType || "pronta") !== "producao");
+  const producao = items.filter((c) => c.stockType === "producao");
+
+  if (pronta.length) {
+    drawSectionHeader("PRONTA ENTREGA", [99, 153, 34]);
+    for (const c of pronta) await drawItem(c);
+  }
+  if (producao.length) {
+    drawSectionHeader("EM PRODUÇÃO — até 30 dias", [186, 117, 23]);
+    for (const c of producao) await drawItem(c);
+  }
+
   if (showPrice) {
     const total = items.reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
     if (y > 760) { doc.addPage(); y = 46; }
@@ -571,6 +607,7 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [orders, setOrders] = useState([]);
   const [stockItems, setStockItems] = useState([]);
+  const [cutBatches, setCutBatches] = useState([]);
   const [session, setSession] = useState(null);
   const [screen, setScreen] = useState("catalog");
   const [cart, setCart] = useState([]);
@@ -584,7 +621,7 @@ export default function App() {
 
   async function loadAppData() {
     await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
-    const [profRows, pRows, bRows, sRow, clRows, ordRows, siRows] = await Promise.all([
+    const [profRows, pRows, bRows, sRow, clRows, ordRows, siRows, cbRows] = await Promise.all([
       withRetry(() => supabase.from("profiles").select("*")),
       withRetry(() => supabase.from("products").select("*")),
       withRetry(() => supabase.from("banners").select("*").order("sort_order")),
@@ -592,6 +629,7 @@ export default function App() {
       withRetry(() => supabase.from("clients").select("*")),
       withRetry(() => supabase.from("orders").select("*")),
       withRetry(() => supabase.from("stock_items").select("*")),
+      withRetry(() => supabase.from("cut_batches").select("*")),
     ]);
     const finalUsers = {};
     (profRows.data || []).forEach((p) => { finalUsers[p.username] = { name: p.name, role: p.role, access: p.access, authEmail: AUTH_EMAIL_OVERRIDES[p.username] || `${p.username}@mallo.internal` }; });
@@ -601,6 +639,7 @@ export default function App() {
     setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "" } : { orderEmail: "", orderWhatsapp: "" });
     setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
     setStockItems((siRows.data || []).map(rowToStockItem));
+    setCutBatches((cbRows.data || []).map(rowToCutBatch));
     return finalUsers;
   }
 
@@ -648,6 +687,44 @@ function rowToStockItem(r) {
     setStockItems(next);
     try { await diffSyncTable("stock_items", "id", prev, next, stockItemToRow); } catch (e) { console.error("Erro ao salvar itens de estoque:", e); }
   }, [stockItems]);
+  const persistCutBatches = useCallback(async (next) => {
+    const prev = cutBatches;
+    setCutBatches(next);
+    try { await diffSyncTable("cut_batches", "id", prev, next, cutBatchToRow); } catch (e) { console.error("Erro ao salvar cortes:", e); }
+  }, [cutBatches]);
+
+  // Funcionário lança um corte: fica pendente até admin/admincentral aprovar
+  // — não soma em nenhum estoque ainda, é só um registro aguardando revisão.
+  function lancarCorte({ product, variant, size, qty }) {
+    const batch = {
+      id: uid("cb_"), productId: product.id, variantId: variant.id, model: product.model, color: variant.color,
+      size, qty, cutBy: session.name || session.username, cutAt: new Date().toISOString(), status: "pendente",
+    };
+    persistCutBatches([...cutBatches, batch]);
+  }
+
+  // Admin aprova um corte pendente: marca aprovado e soma a quantidade na
+  // Programação do produto (estoque separado da pronta entrega), com
+  // previsão de 30 dias a partir da data do corte.
+  function aprovarCorte(batchId) {
+    const batch = cutBatches.find((b) => b.id === batchId);
+    if (!batch || batch.status !== "pendente") return;
+    const expected = new Date(batch.cutAt); expected.setDate(expected.getDate() + 30);
+    const nextProducts = products.map((p) => p.id !== batch.productId ? p : {
+      ...p,
+      variants: p.variants.map((v) => v.id !== batch.variantId ? v : {
+        ...v,
+        stockProducao: { ...(v.stockProducao || {}), [batch.size]: (v.stockProducao?.[batch.size] || 0) + batch.qty },
+        producaoDate: { ...(v.producaoDate || {}), [batch.size]: expected.toISOString() },
+      }),
+    });
+    persistProducts(nextProducts);
+    persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "aprovado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
+  }
+
+  function rejeitarCorte(batchId) {
+    persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "rejeitado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
+  }
 
   // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
   // (cancelamento), sign=-1 abate de novo (pedido reativado a partir de
@@ -675,6 +752,12 @@ function rowToStockItem(r) {
   // Bipar uma peça em "Receber estoque": soma +1 no estoque daquele
   // tamanho/cor e já cria a peça numerada correspondente (mesma lógica de
   // rastreio da Listagem de itens), pra manter tudo consistente.
+  // Bipar uma peça em "Receber estoque": se aquele tamanho/cor tem
+  // quantidade "Em produção" (corte já aprovado, mas ainda sendo costurado),
+  // essa bipada CONFIRMA que a peça ficou pronta — tira 1 de "Em produção"
+  // e soma 1 em "Pronta entrega" (transferência). Se não tinha nada em
+  // produção esperando, soma direto em "Pronta entrega" (fluxo antigo,
+  // continua funcionando pra reposição normal sem passar pelo corte).
   function scanReceiveStock(code) {
     const match = matchScannedCode(code, products, stockItems);
     if (!match) return { ok: false, message: "Código não reconhecido." };
@@ -682,11 +765,17 @@ function rowToStockItem(r) {
     const variant = product?.variants.find((v) => v.id === match.variantId);
     if (!product || !variant) return { ok: false, message: "Produto não encontrado." };
     const seq = product.nextItemSeq || 1;
+    const emProducao = variant.stockProducao?.[match.size] || 0;
+    const veioDaProducao = emProducao > 0;
     const newStock = (variant.stock?.[match.size] || 0) + 1;
     const nextProducts = products.map((p) => p.id !== product.id ? p : {
       ...p,
       nextItemSeq: seq + 1,
-      variants: p.variants.map((v) => v.id !== variant.id ? v : { ...v, stock: { ...v.stock, [match.size]: newStock } }),
+      variants: p.variants.map((v) => v.id !== variant.id ? v : {
+        ...v,
+        stock: { ...v.stock, [match.size]: newStock },
+        stockProducao: veioDaProducao ? { ...v.stockProducao, [match.size]: emProducao - 1 } : v.stockProducao,
+      }),
     });
     persistProducts(nextProducts);
     persistStockItems([...stockItems, {
@@ -694,7 +783,7 @@ function rowToStockItem(r) {
       sku: product.sku || product.model, color: variant.color, hex: variant.hex, size: match.size,
       seq, orderId: null,
     }]);
-    return { ok: true, message: `${product.model} · ${variant.color} · ${match.size} — estoque agora: ${newStock}` };
+    return { ok: true, message: `${product.model} · ${variant.color} · ${match.size}${veioDaProducao ? " (confirmado da produção)" : ""} — pronta entrega agora: ${newStock}` };
   }
 
   // Bipar uma peça em "Coletar pedido": confere se ela pertence ao pedido
@@ -850,10 +939,10 @@ function rowToStockItem(r) {
   // Aplica várias mudanças de quantidade (uma por tamanho) de uma vez só,
   // partindo do MESMO carrinho atual — evita a corrida de antes, onde
   // gravar um tamanho de cada vez fazia cada gravação "esquecer" a anterior.
-  function commitCartChanges(product, variant, sizeQtyMap) {
+  function commitCartChanges(product, variant, sizeQtyMap, stockType = "pronta") {
     let nextCart = cart;
     Object.entries(sizeQtyMap).forEach(([size, qty]) => {
-      const cartItemId = `${product.id}__${variant.id}__${size}`;
+      const cartItemId = `${product.id}__${variant.id}__${size}__${stockType}`;
       const idx = nextCart.findIndex((c) => c.cartItemId === cartItemId);
       if (qty <= 0) {
         if (idx !== -1) nextCart = nextCart.filter((c) => c.cartItemId !== cartItemId);
@@ -862,7 +951,7 @@ function rowToStockItem(r) {
       } else {
         nextCart = [...nextCart, {
           cartItemId, productId: product.id, variantId: variant.id, model: product.model, category: product.category, price: product.price,
-          color: variant.color, hex: variant.hex, size, qty, image: variant.images[0] || null,
+          color: variant.color, hex: variant.hex, size, qty, image: variant.images[0] || null, stockType,
         }];
       }
     });
@@ -881,7 +970,8 @@ function rowToStockItem(r) {
     const insufficientItem = cart.find((c) => {
       const liveProduct = products.find((p) => p.id === c.productId);
       const liveVariant = liveProduct?.variants.find((v) => v.id === c.variantId);
-      const available = liveVariant?.stock?.[c.size] || 0;
+      const bucket = c.stockType === "producao" ? liveVariant?.stockProducao : liveVariant?.stock;
+      const available = bucket?.[c.size] || 0;
       return c.qty > available;
     });
     if (insufficientItem) {
@@ -891,7 +981,7 @@ function rowToStockItem(r) {
 
     const items = cart.map((c) => {
       const prod = products.find((p) => p.id === c.productId);
-      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId };
+      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId, stockType: c.stockType || "pronta" };
     });
     const { data, error } = await withRetry(() => supabase.functions.invoke("finalize-order", {
       body: { clientName: selectedClient?.buyerName || session.name || session.username, items },
@@ -930,7 +1020,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && session.role === "admincentral" ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -1143,29 +1233,20 @@ function CategoryPill({ active, onClick, children }) {
   );
 }
 
-function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
-  const variants = p.variants && p.variants.length ? p.variants : [{ id: "none", color: "", hex: TOKENS.line, images: [], stock: {} }];
-  const [vIdx, setVIdx] = useState(0);
-  const [imgIdx, setImgIdx] = useState(0);
+function SizeGridSection({ p, variant, stockType, stockMap, cart, commitCartChanges, badgeLabel, badgeColor, hint }) {
   const [sizeQty, setSizeQty] = useState({});
-  const variant = variants[vIdx];
-  const imgs = variant.images && variant.images.length ? variant.images : [null];
 
-  function qtyInCart(size, v = variant) {
-    const item = cart?.find((c) => c.productId === p.id && c.variantId === v.id && c.size === size);
+  function qtyInCart(size) {
+    const item = cart?.find((c) => c.productId === p.id && c.variantId === variant.id && c.size === size && (c.stockType || "pronta") === stockType);
     return item ? item.qty : 0;
   }
 
-  // Ao trocar de cor (ou abrir o produto), a caixinha já parte do que estiver
-  // no carrinho para essa cor — assim não some nem some quantidade que já
-  // tinha sido adicionada antes.
   useEffect(() => {
-    setImgIdx(0);
     const initial = {};
-    SIZES.forEach((s) => { initial[s] = qtyInCart(s, variant); });
+    SIZES.forEach((s) => { initial[s] = qtyInCart(s); });
     setSizeQty(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vIdx]);
+  }, [variant.id]);
 
   function bump(s, stockQty, delta) { setSizeQty((q) => ({ ...q, [s]: Math.max(0, Math.min(stockQty, (q[s] || 0) + delta)) })); }
   function setQtyFor(s, val, stockQty) { setSizeQty((q) => ({ ...q, [s]: Math.max(0, Math.min(stockQty, val)) })); }
@@ -1178,8 +1259,62 @@ function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
       const val = sizeQty[s] || 0;
       if (val !== qtyInCart(s)) changes[s] = val;
     });
-    if (Object.keys(changes).length) commitCartChanges(p, variant, changes);
+    if (Object.keys(changes).length) commitCartChanges(p, variant, changes, stockType);
   }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: badgeColor }} />
+        <span style={{ fontSize: 10.5, fontWeight: 600, color: badgeColor, textTransform: "uppercase", letterSpacing: 0.3 }}>{badgeLabel}</span>
+        {hint && <span style={{ fontSize: 10, color: TOKENS.graphite }}>· {hint}</span>}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        {SIZES.map((s) => {
+          const stockQty = stockMap?.[s] || 0;
+          const out = !stockQty;
+          const current = sizeQty[s] || 0;
+          const inCart = current > 0;
+          return (
+            <div key={s} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+              <div style={{
+                width: "100%", textAlign: "center", padding: "5px 0", borderRadius: 3,
+                background: out ? "#F1EDE4" : inCart ? badgeColor : TOKENS.ivorySoft,
+                color: out ? "#B8AF9C" : inCart ? "#fff" : TOKENS.ink,
+                fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none",
+              }}>{s}</div>
+              <input type="text" inputMode="numeric" disabled={out} value={current}
+                onChange={(e) => setQtyFor(s, parseInt(e.target.value) || 0, stockQty)}
+                style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${inCart ? "#8FBF8F" : TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : inCart ? "#E9F5E9" : "#fff", color: out ? "#B8AF9C" : inCart ? "#2E6B2E" : TOKENS.ink, fontWeight: inCart ? 600 : 400 }} />
+              <div style={{ display: "flex", gap: 3, width: "100%" }}>
+                <button disabled={out || current <= 0} onClick={() => bump(s, stockQty, -1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out || current <= 0 ? "#D8D0C0" : TOKENS.graphite, cursor: out || current <= 0 ? "default" : "pointer" }}><Minus size={11} /></button>
+                <button disabled={out} onClick={() => bump(s, stockQty, 1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out ? "#D8D0C0" : TOKENS.graphite, cursor: out ? "default" : "pointer" }}><Plus size={11} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        disabled={!hasChanges}
+        onClick={commitToCart}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: hasChanges ? badgeColor : TOKENS.line, color: "#fff", border: "none", borderRadius: 3, padding: "8px 0", fontSize: 12, cursor: hasChanges ? "pointer" : "default" }}>
+        <ShoppingCart size={12} /> {hasChanges ? `Adicionar (${totalQty})` : "Adicionar"}
+      </button>
+    </div>
+  );
+}
+
+function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
+  const variants = p.variants && p.variants.length ? p.variants : [{ id: "none", color: "", hex: TOKENS.line, images: [], stock: {} }];
+  const [vIdx, setVIdx] = useState(0);
+  const [imgIdx, setImgIdx] = useState(0);
+  const variant = variants[vIdx];
+  const imgs = variant.images && variant.images.length ? variant.images : [null];
+
+  useEffect(() => { setImgIdx(0); }, [vIdx]);
+
+  const temProducao = variant.stockProducao && SIZES.some((s) => (variant.stockProducao[s] || 0) > 0);
+  const dataProducao = temProducao ? SIZES.map((s) => variant.producaoDate?.[s]).filter(Boolean).sort().pop() : null;
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1219,51 +1354,11 @@ function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 6, marginTop: 12, borderTop: `1px dashed ${TOKENS.line}`, paddingTop: 10 }}>
-          {SIZES.map((s) => {
-            const stockQty = variant.stock ? (variant.stock[s] || 0) : 0;
-            const out = !stockQty;
-            const current = sizeQty[s] || 0;
-            const inCart = current > 0;
-            return (
-              <div key={s} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                <div style={{
-                  width: "100%", textAlign: "center", padding: "5px 0", borderRadius: 3,
-                  background: out ? "#F1EDE4" : inCart ? TOKENS.wine : TOKENS.ivorySoft,
-                  color: out ? "#B8AF9C" : inCart ? "#fff" : TOKENS.ink,
-                  fontSize: 11.5, fontWeight: 600, textDecoration: out ? "line-through" : "none",
-                }}>{s}</div>
-                <input type="text" inputMode="numeric" disabled={out} value={current}
-                  onChange={(e) => setQtyFor(s, parseInt(e.target.value) || 0, stockQty)}
-                  title={inCart ? "Será adicionado/atualizado no carrinho" : ""}
-                  style={{ width: "100%", textAlign: "center", fontSize: 11.5, border: `1px solid ${inCart ? "#8FBF8F" : TOKENS.line}`, borderRadius: 3, padding: "3px 0", background: out ? "#F1EDE4" : inCart ? "#E9F5E9" : "#fff", color: out ? "#B8AF9C" : inCart ? "#2E6B2E" : TOKENS.ink, fontWeight: inCart ? 600 : 400 }} />
-                <div style={{ display: "flex", gap: 3, width: "100%" }}>
-                  <button disabled={out || current <= 0} onClick={() => bump(s, stockQty, -1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out || current <= 0 ? "#D8D0C0" : TOKENS.graphite, cursor: out || current <= 0 ? "default" : "pointer" }}><Minus size={11} /></button>
-                  <button disabled={out} onClick={() => bump(s, stockQty, 1)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: "#fff", color: out ? "#D8D0C0" : TOKENS.graphite, cursor: out ? "default" : "pointer" }}><Plus size={11} /></button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div style={{ fontSize: 9.5, color: TOKENS.graphite, marginTop: 8, marginBottom: 3, letterSpacing: 0.3 }}>Estoque atual</div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {SIZES.map((s) => {
-            const stockQty = variant.stock ? (variant.stock[s] || 0) : 0;
-            return (
-              <div key={s} style={{ flex: 1, textAlign: "center", fontSize: 11, fontWeight: 600, padding: "4px 0", borderRadius: 3, background: TOKENS.ivorySoft, color: stockQty ? TOKENS.graphite : "#B8AF9C", border: `1px solid ${TOKENS.line}` }}>
-                {stockQty}
-              </div>
-            );
-          })}
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <button
-            disabled={!hasChanges || !p.variants?.length}
-            onClick={commitToCart}
-            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: hasChanges ? TOKENS.wine : TOKENS.line, color: "#fff", border: "none", borderRadius: 3, padding: "9px 0", fontSize: 12.5, cursor: hasChanges ? "pointer" : "default" }}>
-            <ShoppingCart size={13} /> {hasChanges ? `Adicionar (${totalQty})` : "Adicionar"}
-          </button>
+        <div style={{ borderTop: `1px dashed ${TOKENS.line}`, paddingTop: 4 }}>
+          <SizeGridSection p={p} variant={variant} stockType="pronta" stockMap={variant.stock} cart={cart} commitCartChanges={commitCartChanges} badgeLabel="Pronta entrega" badgeColor={TOKENS.wine} />
+          {temProducao && (
+            <SizeGridSection p={p} variant={variant} stockType="producao" stockMap={variant.stockProducao} cart={cart} commitCartChanges={commitCartChanges} badgeLabel="Em produção" badgeColor="#BA7517" hint={dataProducao ? `previsão ${new Date(dataProducao).toLocaleDateString("pt-BR")}` : null} />
+          )}
         </div>
       </div>
     </div>
@@ -1342,7 +1437,8 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
   function availableFor(c) {
     const liveProduct = products.find((p) => p.id === c.productId);
     const liveVariant = liveProduct?.variants.find((v) => v.id === c.variantId);
-    return liveVariant?.stock?.[c.size] || 0;
+    const bucket = c.stockType === "producao" ? liveVariant?.stockProducao : liveVariant?.stock;
+    return bucket?.[c.size] || 0;
   }
   const hasInsufficientStock = cart.some((c) => c.qty > availableFor(c));
   const pdfFileName = `pedido-${(session.name || session.username).replace(/\s+/g, "-").toLowerCase()}.pdf`;
@@ -1455,6 +1551,7 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
                     <div style={{ fontSize: 13, fontWeight: 600, color: insufficient ? "#A5453F" : TOKENS.ink }}>{c.model}</div>
                     <div style={{ fontSize: 11, color: TOKENS.graphite, display: "flex", alignItems: "center", gap: 5, margin: "3px 0" }}>
                       <span style={{ width: 10, height: 10, borderRadius: "50%", background: c.hex, display: "inline-block", border: `1px solid ${TOKENS.line}` }} /> {c.color} · Tam {c.size}
+                      {c.stockType === "producao" && <span style={{ fontSize: 9.5, fontWeight: 600, color: "#633806", background: "#FAEEDA", padding: "1px 6px", borderRadius: 3 }}>EM PRODUÇÃO</span>}
                     </div>
                     {insufficient && <div style={{ fontSize: 10.5, color: "#A5453F", marginBottom: 4 }}>Só {availableQty} disponível — reduza a quantidade para {availableQty} ou menos.</div>}
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
@@ -1566,7 +1663,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, aprovarCorte, rejeitarCorte }) {
   const [tab, setTab] = useState("produtos");
   const tabs = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
@@ -1593,7 +1690,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} cutBatches={cutBatches} lancarCorte={lancarCorte} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -2057,14 +2154,18 @@ function ClientForm({ initial, onCancel, onSave }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, cutBatches, lancarCorte, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
+  const canApprove = session?.role === "admin" || session?.role === "admincentral";
+  const pendentes = cutBatches.filter((b) => b.status === "pendente").length;
 
   if (mode === "receber") return <ReceberEstoqueView scanReceiveStock={scanReceiveStock} onBack={() => setMode("menu")} />;
   if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onView={(o) => { setActiveOrder(o); setMode("ver-pedido"); }} onBack={() => setMode("menu")} />;
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
+  if (mode === "lancar-corte") return <LancarCorteView products={products} lancarCorte={lancarCorte} onBack={() => setMode("menu")} />;
+  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
     <div>
@@ -2073,12 +2174,23 @@ function ColetaEstoqueAdmin({ orders, scanReceiveStock, scanCollectOrder, update
         <button onClick={() => setMode("receber")} style={{ flex: "1 1 240px", background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 24, textAlign: "left", cursor: "pointer" }}>
           <ScanBarcode size={22} color={TOKENS.wine} />
           <div style={{ fontSize: 15, fontWeight: 600, margin: "10px 0 4px" }}>Receber estoque</div>
-          <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>Bipe as peças que chegaram para somar no estoque.</div>
+          <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>Bipe as peças prontas — confirma a saída da produção para pronta entrega.</div>
         </button>
         <button onClick={() => setMode("coletar-lista")} style={{ flex: "1 1 240px", background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 24, textAlign: "left", cursor: "pointer" }}>
           <ScanBarcode size={22} color={TOKENS.wine} />
           <div style={{ fontSize: 15, fontWeight: 600, margin: "10px 0 4px" }}>Coletar pedido</div>
           <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>Escolha um pedido e bipe as peças para separar.</div>
+        </button>
+        <button onClick={() => setMode("lancar-corte")} style={{ flex: "1 1 240px", background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 24, textAlign: "left", cursor: "pointer" }}>
+          <Scissors size={22} color={TOKENS.wine} />
+          <div style={{ fontSize: 15, fontWeight: 600, margin: "10px 0 4px" }}>Lançar corte</div>
+          <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>Registre um corte feito — fica em produção até aprovação.</div>
+        </button>
+        <button onClick={() => setMode("cortes")} style={{ flex: "1 1 240px", background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 24, textAlign: "left", cursor: "pointer", position: "relative" }}>
+          {pendentes > 0 && <span style={{ position: "absolute", top: 14, right: 14, background: TOKENS.wine, color: "#fff", fontSize: 11, fontWeight: 700, borderRadius: 12, padding: "2px 8px" }}>{pendentes}</span>}
+          <Scissors size={22} color={TOKENS.wine} />
+          <div style={{ fontSize: 15, fontWeight: 600, margin: "10px 0 4px" }}>Cortes lançados</div>
+          <div style={{ fontSize: 12.5, color: TOKENS.graphite }}>{canApprove ? "Aprove ou recuse os cortes pendentes." : "Veja o status dos cortes que você lançou."}</div>
         </button>
       </div>
     </div>
@@ -2280,6 +2392,138 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
       <button onClick={confirm} disabled={!allComplete} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 16, opacity: allComplete ? 1 : 0.5, cursor: allComplete ? "pointer" : "not-allowed" }}>
         <Check size={15} /> {allComplete ? "Confirmar coleta" : "Falta completar todos os itens"}
       </button>
+    </div>
+  );
+}
+
+function LancarCorteView({ products, lancarCorte, onBack }) {
+  const withVariants = products.filter((p) => p.variants && p.variants.length);
+  const [productId, setProductId] = useState(withVariants[0]?.id || "");
+  const product = withVariants.find((p) => p.id === productId);
+  const [variantId, setVariantId] = useState(product?.variants[0]?.id || "");
+  const variant = product?.variants.find((v) => v.id === variantId);
+  const [size, setSize] = useState("P");
+  const [qty, setQty] = useState(1);
+  const [sent, setSent] = useState(false);
+
+  useEffect(() => { setVariantId(product?.variants[0]?.id || ""); }, [productId]);
+
+  function submit(e) {
+    e.preventDefault();
+    if (!product || !variant || !qty) return;
+    lancarCorte({ product, variant, size, qty: Math.max(1, Math.floor(qty)) });
+    setSent(true);
+    setQty(1);
+    setTimeout(() => setSent(false), 2000);
+  }
+
+  return (
+    <div style={{ maxWidth: 460 }}>
+      <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0 4px" }}>Lançar corte</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Registre o que foi cortado agora. Fica pendente até a aprovação de um administrador.</div>
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label style={labelStyle}>Produto</label>
+          <select value={productId} onChange={(e) => setProductId(e.target.value)} style={inputStyle}>
+            {withVariants.map((p) => <option key={p.id} value={p.id}>{p.model}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Cor</label>
+          <select value={variantId} onChange={(e) => setVariantId(e.target.value)} style={inputStyle}>
+            {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Tamanho</label>
+            <select value={size} onChange={(e) => setSize(e.target.value)} style={inputStyle}>
+              {SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Quantidade cortada</label>
+            <input type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+        <button type="submit" style={{ ...btnPrimary, justifyContent: "center", marginTop: 6 }} disabled={!product || !variant}>
+          <Scissors size={14} /> Lançar corte
+        </button>
+        {sent && <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 12.5, padding: "8px 12px", borderRadius: 4 }}>Corte lançado, aguardando aprovação.</div>}
+      </form>
+    </div>
+  );
+}
+
+function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApprove, onBack }) {
+  const sorted = cutBatches.slice().sort((a, b) => new Date(b.cutAt) - new Date(a.cutAt));
+  const pendentes = sorted.filter((b) => b.status === "pendente");
+  const outros = sorted.filter((b) => b.status !== "pendente");
+
+  function codeFor(b) {
+    const product = products.find((p) => p.id === b.productId);
+    const baseCode = (product?.sku || b.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
+    const colorCode = (b.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
+    return `${baseCode}-${colorCode}-${b.size}`;
+  }
+  async function printBatchPdf(b) {
+    const code = codeFor(b);
+    const entries = Array.from({ length: b.qty }, () => ({ model: b.model, color: b.color, size: b.size, code }));
+    const blob = await buildItemLabelsPdfBlob(entries);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `producao-${b.model.replace(/\s+/g, "-").toLowerCase()}-${b.color.replace(/\s+/g, "-").toLowerCase()}-${b.size}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  function printBatchEpl(b) {
+    const code = codeFor(b);
+    const entries = Array.from({ length: b.qty }, () => ({ model: b.model, color: b.color, size: b.size, code }));
+    downloadEplFile(buildEplLabels(entries), `producao-${b.model.replace(/\s+/g, "-").toLowerCase()}-${b.color.replace(/\s+/g, "-").toLowerCase()}-${b.size}.epl`);
+  }
+
+  function Row({ b }) {
+    const statusColor = b.status === "aprovado" ? { bg: "#EAF3DE", fg: "#27500A" } : b.status === "rejeitado" ? { bg: "#FCEBEB", fg: "#791F1F" } : { bg: "#FAEEDA", fg: "#633806" };
+    return (
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{b.model} · {b.color} · {b.size} — {b.qty} peça(s)</div>
+            <div style={{ fontSize: 11.5, color: TOKENS.graphite, marginTop: 2 }}>Lançado por {b.cutBy} · {new Date(b.cutAt).toLocaleString("pt-BR")}</div>
+            {b.status !== "pendente" && b.approvedBy && <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{b.status === "aprovado" ? "Aprovado" : "Recusado"} por {b.approvedBy} · {new Date(b.approvedAt).toLocaleString("pt-BR")}</div>}
+          </div>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 3, background: statusColor.bg, color: statusColor.fg, whiteSpace: "nowrap" }}>{b.status}</span>
+        </div>
+        {b.status === "aprovado" && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={() => printBatchPdf(b)} style={btnGhostSmall}><Printer size={13} /> Etiquetas (PDF)</button>
+            <button onClick={() => printBatchEpl(b)} style={btnGhostSmall}>.epl (Zebra)</button>
+          </div>
+        )}
+        {canApprove && b.status === "pendente" && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={() => aprovarCorte(b.id)} style={{ ...btnPrimary, padding: "6px 14px", fontSize: 12 }}><Check size={13} /> Aprovar</button>
+            <button onClick={() => rejeitarCorte(b.id)} style={{ ...btnGhostSmall, color: "#A5453F" }}><X size={13} /> Recusar</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0 18px" }}>Cortes lançados</div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Pendentes ({pendentes.length})</div>
+      {pendentes.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 18 }}>Nenhum corte pendente.</div>}
+      {pendentes.map((b) => <Row key={b.id} b={b} />)}
+      {outros.length > 0 && (
+        <>
+          <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, margin: "18px 0 8px" }}>Histórico</div>
+          {outros.map((b) => <Row key={b.id} b={b} />)}
+        </>
+      )}
     </div>
   );
 }
@@ -2893,6 +3137,7 @@ function BannersAdmin({ banners, setBanners }) {
 function FieldLabel({ children }) { return <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: TOKENS.graphite, margin: "10px 0 5px" }}>{children}</div>; }
 
 const inputStyle = { width: "100%", border: `1px solid ${TOKENS.line}`, borderRadius: 3, padding: "9px 10px", fontSize: 13.5, outline: "none", background: "#fff", boxSizing: "border-box", fontFamily: "inherit" };
+const labelStyle = { display: "block", fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 };
 const btnPrimary = { display: "flex", alignItems: "center", gap: 6, background: TOKENS.wine, color: "#fff", border: "none", borderRadius: 3, padding: "9px 16px", fontSize: 13, cursor: "pointer" };
 const btnGhostSmall = { display: "flex", alignItems: "center", gap: 5, background: "#fff", color: TOKENS.graphite, border: `1px solid ${TOKENS.line}`, borderRadius: 3, padding: "7px 11px", fontSize: 12, cursor: "pointer" };
 const iconBtnStyle = { background: "none", border: "none", cursor: "pointer", color: TOKENS.graphite, display: "flex", alignItems: "center", justifyContent: "center", padding: 4 };
