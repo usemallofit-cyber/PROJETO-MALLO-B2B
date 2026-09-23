@@ -2265,16 +2265,38 @@ function computeCutReports(cutBatches, products) {
 }
 
 function RelatoriosCorteAdmin({ cutBatches, products }) {
-  const r = useMemo(() => computeCutReports(cutBatches, products), [cutBatches, products]);
+  const [yearFilter, setYearFilter] = useState("all");
+  const [monthFilter, setMonthFilter] = useState("all");
+  const years = useMemo(() => Array.from(new Set(cutBatches.map((b) => b.cutAt.slice(0, 4)))).sort().reverse(), [cutBatches]);
+  const MESES = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
+  const filteredBatches = useMemo(() => cutBatches.filter((b) => {
+    if (yearFilter !== "all" && b.cutAt.slice(0, 4) !== yearFilter) return false;
+    if (monthFilter !== "all" && b.cutAt.slice(5, 7) !== monthFilter) return false;
+    return true;
+  }), [cutBatches, yearFilter, monthFilter]);
+  const r = useMemo(() => computeCutReports(filteredBatches, products), [filteredBatches, products]);
   const maxModelo = Math.max(1, ...r.modelosRanking.map((m) => m.qty));
   const maxTamanho = Math.max(1, ...Object.values(r.porTamanho));
   const maxCortador = Math.max(1, ...r.cortadoresRanking.map((c) => c.qty));
 
   function diasDesde(iso) { return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000); }
+  function labelMes(m) {
+    return new Date(2024, Number(m) - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
+  }
 
   return (
     <div>
-      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 16 }}>Relatórios · Estoque e Corte</div>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 4 }}>Relatórios · Estoque e Corte</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <select value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+          <option value="all">Todos os anos</option>
+          {years.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+          <option value="all">Todos os meses</option>
+          {MESES.map((m) => <option key={m} value={m}>{labelMes(m)}</option>)}
+        </select>
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 24 }}>
         {[
