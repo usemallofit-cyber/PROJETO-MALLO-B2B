@@ -3095,14 +3095,20 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
                 ))}
               </div>
               <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginBottom: 6, lineHeight: 1.6 }}>
-                {(p.variants || []).map((v) => (
-                  <div key={v.id}>
-                    <b style={{ color: TOKENS.ink }}>{v.color || "(sem nome)"}:</b> {SIZES.map((s) => `${s} ${v.stock?.[s] || 0}`).join(" · ")}
-                  </div>
-                ))}
+                {(p.variants || []).map((v) => {
+                  const temProducao = SIZES.some((s) => (v.stockProducao?.[s] || 0) > 0);
+                  return (
+                    <div key={v.id}>
+                      <b style={{ color: TOKENS.ink }}>{v.color || "(sem nome)"}:</b> {SIZES.map((s) => `${s} ${v.stock?.[s] || 0}`).join(" · ")}
+                      {temProducao && <div style={{ color: "#BA7517" }}>Em produção: {SIZES.map((s) => `${s} ${v.stockProducao?.[s] || 0}`).join(" · ")}</div>}
+                    </div>
+                  );
+                })}
               </div>
               <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.ink, borderTop: `1px solid ${TOKENS.line}`, paddingTop: 6, marginBottom: 10 }}>
                 Total: {(p.variants || []).reduce((a, v) => a + SIZES.reduce((b, s) => b + (v.stock?.[s] || 0), 0), 0)} peça(s)
+                {(p.variants || []).reduce((a, v) => a + SIZES.reduce((b, s) => b + (v.stockProducao?.[s] || 0), 0), 0) > 0 &&
+                  <span style={{ color: "#BA7517", fontWeight: 400 }}> · {(p.variants || []).reduce((a, v) => a + SIZES.reduce((b, s) => b + (v.stockProducao?.[s] || 0), 0), 0)} em produção</span>}
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => startEdit(p)} style={btnGhostSmall}><Pencil size={13} /> Editar</button>
