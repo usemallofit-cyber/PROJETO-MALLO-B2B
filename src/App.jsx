@@ -250,6 +250,33 @@ function loadJsBarcode() {
   return _jsBarcodeLoading;
 }
 
+// Mesmo esquema para a biblioteca de planilhas (SheetJS/xlsx), usada nas
+// exportações de Clientes e Estoque em Excel.
+let _xlsxLoading = null;
+function loadXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (_xlsxLoading) return _xlsxLoading;
+  _xlsxLoading = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = () => reject(new Error("Falha ao carregar XLSX"));
+    document.head.appendChild(script);
+  });
+  return _xlsxLoading;
+}
+function downloadXLSX(XLSX, rows, sheetName, filename) {
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+}
+
+
+// etiqueta com 33 x 21mm e 0,2mm de distância entre as colunas — pronto
+// pra folha de etiqueta autoadesiva com 3 colunas. Sempre gerada nessa
+// mesma sequência (esquerda pra direita, cima pra baixo), independente de
+// qual tela pediu a etiqueta.
 // Todas as etiquetas saem numa grade de 3 colunas por folha A4, cada
 // etiqueta com 33 x 21mm e 0,2mm de distância entre as colunas — pronto
 // pra folha de etiqueta autoadesiva com 3 colunas. Sempre gerada nessa
@@ -2030,6 +2057,15 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
     setClients(exists ? clients.map((x) => (x.id === c.id ? c : x)) : [c, ...clients]);
     setShowForm(false); setEditing(null);
   }
+  async function exportarExcel() {
+    const XLSX = await loadXLSX();
+    const rows = visible.map((c) => ({
+      "Nome/Empresa": c.buyerName, "CNPJ": c.cnpj || "", "CPF": c.cpf || "", "IE": c.ie || "",
+      "E-mail": c.email || "", "Telefone": c.phone || "", "Endereço": c.address || "",
+      "Instagram": c.instagram || "", "Referências": c.references || "", "Representante": repName(c.repUsername),
+    }));
+    downloadXLSX(XLSX, rows, "Clientes", `clientes-mallo-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
 
   return (
     <div>
@@ -2043,6 +2079,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
               {reps.map((r) => <option key={r.username} value={r.username}>{r.name}</option>)}
             </select>
           )}
+          <button onClick={exportarExcel} style={btnGhostSmall}><Download size={13} /> Exportar Excel</button>
           <button onClick={startNew} style={btnPrimary}><Plus size={15} /> Novo cliente</button>
         </div>
       </div>
@@ -3121,6 +3158,27 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
 
   const list = filterCat === "Todas" ? products : products.filter((p) => p.category === filterCat);
 
+  async function exportarEstoqueExcel() {
+    const XLSX = await loadXLSX();
+    const rows = [];
+    list.forEach((p) => {
+      (p.variants || []).forEach((v) => {
+        SIZES.forEach((s) => {
+          const pronta = v.stock?.[s] || 0;
+          const producao = v.stockProducao?.[s] || 0;
+          if (!pronta && !producao) return;
+          rows.push({
+            "Categoria": p.category || "", "Modelo": p.model, "SKU": p.sku || "", "Cor": v.color || "(sem nome)",
+            "Tamanho": s, "Pronta entrega": pronta, "Em produção": producao,
+            "Previsão produção": producao && v.producaoDate?.[s] ? new Date(v.producaoDate[s]).toLocaleDateString("pt-BR") : "",
+            "Preço": p.price || "", "Preço de custo": p.costPrice || "",
+          });
+        });
+      });
+    });
+    downloadXLSX(XLSX, rows, "Estoque", `estoque-mallo-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -3130,6 +3188,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
             <option>Todas</option>
             {categories.map((c) => <option key={c}>{c}</option>)}
           </select>
+          <button onClick={exportarEstoqueExcel} style={btnGhostSmall}><Download size={13} /> Exportar Excel</button>
           <button onClick={startNew} style={btnPrimary}><Plus size={15} /> Novo modelo</button>
         </div>
       </div>
