@@ -15,7 +15,7 @@ const TOKENS = {
 };
 
 const SIZES = ["P", "M", "G", "GG"];
-const CATEGORIES = ["Conjunto de Short", "Conjunto de Calça", "Macaquinhos", "KIT's"];
+const DEFAULT_CATEGORIES = ["Conjunto de Short", "Conjunto de Calça", "Macaquinhos", "KIT's"];
 const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const STORE_KEYS = {
   users: "catalog_users_v5", products: "catalog_products_v5", banners: "catalog_banners_v5",
@@ -645,7 +645,7 @@ export default function App() {
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
-    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "" } : { orderEmail: "", orderWhatsapp: "" });
+    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES });
     setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
     setStockItems((siRows.data || []).map(rowToStockItem));
     setCutBatches((cbRows.data || []).map(rowToCutBatch));
@@ -668,7 +668,7 @@ export default function App() {
   const persistSettings = useCallback(async (next) => {
     setSettings(next);
     try {
-      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp });
+      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES });
       if (error) throw error;
     } catch (e) { console.error("Erro ao salvar configurações:", e); }
   }, []);
@@ -1071,7 +1071,7 @@ function rowToStockItem(r) {
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
         <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToCart} />
       ) : (
-        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} />
+        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} categories={settings.categories || DEFAULT_CATEGORIES} />
       )}
       {cartOpen && (
         <CartDrawer
@@ -1225,10 +1225,10 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
 }
 
 /* ---------------- CATALOG (client-facing) ---------------- */
-function CatalogView({ products, banners, session, addToCart, cart, commitCartChanges }) {
+function CatalogView({ products, banners, session, addToCart, cart, commitCartChanges, categories }) {
   const showPrice = session.role === "admin" || session.role === "admincentral" || session.role === "representante" || session.access === "atacado";
   const [activeCat, setActiveCat] = useState("Todas");
-  const presentCats = CATEGORIES.filter((cat) => products.some((p) => p.category === cat));
+  const presentCats = categories.filter((cat) => products.some((p) => p.category === cat));
   const filtered = activeCat === "Todas" ? products : products.filter((p) => p.category === activeCat);
   const grouped = activeCat === "Todas"
     ? presentCats.map((cat) => ({ cat, items: products.filter((p) => p.category === cat) }))
@@ -1248,7 +1248,7 @@ function CatalogView({ products, banners, session, addToCart, cart, commitCartCh
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${TOKENS.line}`, paddingBottom: 16, marginBottom: 26 }}>
           <CategoryPill active={activeCat === "Todas"} onClick={() => setActiveCat("Todas")}>Todas</CategoryPill>
-          {CATEGORIES.map((cat) => <CategoryPill key={cat} active={activeCat === cat} onClick={() => setActiveCat(cat)}>{cat}</CategoryPill>)}
+          {categories.map((cat) => <CategoryPill key={cat} active={activeCat === cat} onClick={() => setActiveCat(cat)}>{cat}</CategoryPill>)}
         </div>
 
         {products.length === 0 ? (
@@ -1735,6 +1735,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
     { id: "coleta", label: "Coleta e Estoque", icon: ScanBarcode },
     { id: "relatorios-corte", label: "Relatórios Estoque e Corte", icon: BarChart3 },
+    { id: "catalogo-modelos", label: "Catálogo de Modelos", icon: Crown },
     { id: "pedidos", label: "Pedidos", icon: Archive },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
     { id: "login-clientes", label: "Login de Clientes", icon: Users },
@@ -1754,10 +1755,11 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
           );
         })}
       </div>
-      {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} />}
+      {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} />}
+      {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -2093,6 +2095,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
   const [downloadingId, setDownloadingId] = useState("");
   const [copyModalOrder, setCopyModalOrder] = useState(null);
   const [copyClientId, setCopyClientId] = useState("");
+  const [expandedId, setExpandedId] = useState("");
 
   async function downloadOrderPdf(o) {
     setDownloadingId(o.id);
@@ -2149,6 +2152,9 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
                 {o.status === "Pedido completo" && o.collectedBy && <div style={{ fontSize: 10, color: TOKENS.ok, marginTop: 2 }}>Coletado por {o.collectedBy} · {o.collectedAt ? new Date(o.collectedAt).toLocaleString("pt-BR") : ""}</div>}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setExpandedId(expandedId === o.id ? "" : o.id)} title="Ver movimentações" style={{ ...iconBtnStyle, border: `1px solid ${TOKENS.line}`, borderRadius: 3 }}>
+                  {expandedId === o.id ? <Minus size={14} /> : <Plus size={14} />}
+                </button>
                 <button onClick={() => downloadOrderPdf(o)} disabled={downloadingId === o.id} style={{ ...btnGhostSmall, whiteSpace: "nowrap" }}>
                   <Printer size={13} /> {downloadingId === o.id ? "Gerando..." : "Baixar PDF"}
                 </button>
@@ -2158,6 +2164,24 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
                   </button>
                 )}
               </div>
+              {expandedId === o.id && (
+                <div style={{ gridColumn: "1 / -1", background: TOKENS.ivorySoft, borderRadius: 4, padding: "10px 14px", fontSize: 12 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6, color: TOKENS.ink }}>Movimentações deste pedido</div>
+                  {(!o.statusLog || !o.statusLog.length) && <div style={{ color: TOKENS.graphite }}>Nenhum registro de movimentação.</div>}
+                  {(o.statusLog || []).map((l, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: i < o.statusLog.length - 1 ? `1px dashed ${TOKENS.line}` : "none" }}>
+                      <span>{l.status} — por {l.by}</span>
+                      <span style={{ color: TOKENS.graphite }}>{new Date(l.when).toLocaleString("pt-BR")}</span>
+                    </div>
+                  ))}
+                  {o.collectedBy && (
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", marginTop: 4, borderTop: `1px solid ${TOKENS.line}`, color: TOKENS.ok }}>
+                      <span>Coleta confirmada — por {o.collectedBy}</span>
+                      <span>{o.collectedAt ? new Date(o.collectedAt).toLocaleString("pt-BR") : ""}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -2409,7 +2433,43 @@ function RelatoriosCorteAdmin({ cutBatches, products }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function CatalogoModelosAdmin({ settings, setSettings }) {
+  const categories = settings.categories || DEFAULT_CATEGORIES;
+  const [novaCategoria, setNovaCategoria] = useState("");
+
+  function addCategoria() {
+    const nome = novaCategoria.trim();
+    if (!nome) return;
+    if (categories.some((c) => c.toLowerCase() === nome.toLowerCase())) { alert("Essa categoria já existe."); return; }
+    setSettings({ ...settings, categories: [...categories, nome] });
+    setNovaCategoria("");
+  }
+  function removeCategoria(nome) {
+    if (!confirm(`Remover a categoria "${nome}"? Produtos que já usam ela continuam com essa categoria — só não aparece mais pra escolher em produtos novos.`)) return;
+    setSettings({ ...settings, categories: categories.filter((c) => c !== nome) });
+  }
+
+  return (
+    <div style={{ maxWidth: 460 }}>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Modelos</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Categorias usadas ao cadastrar produtos e lançar cortes. Crie uma nova se precisar.</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <input value={novaCategoria} onChange={(e) => setNovaCategoria(e.target.value)} placeholder="Nova categoria" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCategoria()} />
+        <button onClick={addCategoria} style={btnPrimary}><Plus size={14} /> Adicionar</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+        {categories.map((c) => (
+          <div key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+            <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c}</span>
+            <button onClick={() => removeCategoria(c)} style={iconBtnStyle}><Trash2 size={15} color="#A5453F" /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ColetaEstoqueAdmin({ orders, products, settings, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -2419,7 +2479,7 @@ function ColetaEstoqueAdmin({ orders, products, cutBatches, lancarCorte, garanti
   if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onView={(o) => { setActiveOrder(o); setMode("ver-pedido"); }} onBack={() => setMode("menu")} />;
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
-  if (mode === "lancar-corte") return <LancarCorteView products={products} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} onBack={() => setMode("menu")} />;
+  if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} onBack={() => setMode("menu")} />;
   if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
@@ -2653,7 +2713,7 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   );
 }
 
-function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBack }) {
+function LancarCorteView({ products, categories, lancarCorte, garantirProdutoVariante, onBack }) {
   const [novoModelo, setNovoModelo] = useState(false);
   const [productId, setProductId] = useState(products[0]?.id || "");
   const product = products.find((p) => p.id === productId);
@@ -2662,7 +2722,7 @@ function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBac
 
   const [model, setModel] = useState("");
   const [sku, setSku] = useState("");
-  const [category, setCategory] = useState(CATEGORIES[0]);
+  const [category, setCategory] = useState(categories[0]);
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
   const [costPrice, setCostPrice] = useState("");
@@ -2766,7 +2826,7 @@ function LancarCorteView({ products, lancarCorte, garantirProdutoVariante, onBac
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Categoria</label>
                 <select value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle}>
-                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {categories.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             </div>
@@ -2948,7 +3008,7 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
   );
 }
 
-function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
+function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categories }) {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filterCat, setFilterCat] = useState("Todas");
@@ -2957,7 +3017,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
   const [labelQty, setLabelQty] = useState({ P: 0, M: 0, G: 0, GG: 0 });
   const [generatingLabels, setGeneratingLabels] = useState(false);
 
-  function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: CATEGORIES[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: categories[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
   function startEdit(p) { setEditing({ ...p, variants: p.variants.map((v) => ({ ...v, stock: { ...v.stock } })) }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este produto do catálogo?")) setProducts(products.filter((p) => p.id !== id)); }
   // Ao salvar, compara o estoque anterior (editing) com o novo (p), por cor
@@ -3068,7 +3128,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={{ ...inputStyle, width: "auto", padding: "8px 10px" }}>
             <option>Todas</option>
-            {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+            {categories.map((c) => <option key={c}>{c}</option>)}
           </select>
           <button onClick={startNew} style={btnPrimary}><Plus size={15} /> Novo modelo</button>
         </div>
@@ -3120,7 +3180,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems }) {
           );
         })}
       </div>
-      {showForm && <ProductForm initial={editing} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
+      {showForm && <ProductForm initial={editing} categories={categories} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
 
       {labelModal && (
         <div style={overlayStyle}>
@@ -3294,7 +3354,7 @@ function ItemListAdmin({ stockItems, setStockItems, orders, products, setProduct
   );
 }
 
-function ProductForm({ initial, onCancel, onSave }) {
+function ProductForm({ initial, categories, onCancel, onSave }) {
   const [p, setP] = useState(initial);
 
   function addVariant() { setP((s) => ({ ...s, variants: [...s.variants, { id: uid("v_"), color: "", hex: "#8C3A3A", images: [], stock: { P: 0, M: 0, G: 0, GG: 0 } }] })); }
@@ -3318,7 +3378,7 @@ function ProductForm({ initial, onCancel, onSave }) {
         <div style={{ padding: 20, maxHeight: "72vh", overflowY: "auto" }}>
           <FieldLabel>Categoria</FieldLabel>
           <select value={p.category} onChange={(e) => setP({ ...p, category: e.target.value })} style={inputStyle}>
-            {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+            {categories.map((c) => <option key={c}>{c}</option>)}
           </select>
 
           <FieldLabel>Nome do modelo</FieldLabel>
