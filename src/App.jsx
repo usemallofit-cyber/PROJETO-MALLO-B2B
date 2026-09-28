@@ -41,11 +41,13 @@ function rowToBanner(r) { return { id: r.id, url: r.url }; }
 function clientToRow(c) {
   return { id: c.id, buyer_name: c.buyerName, cnpj: c.cnpj || null, cpf: c.cpf || null, ie: c.ie || null,
     email: c.email || null, phone: c.phone || null, address: c.address || null, instagram: c.instagram || null,
-    client_references: c.references || null, rep_username: c.repUsername || null, cep: c.cep || null, whatsapp: c.whatsapp || null };
+    client_references: c.references || null, rep_username: c.repUsername || null, cep: c.cep || null, whatsapp: c.whatsapp || null,
+    razao_social: c.razaoSocial || null };
 }
 function rowToClient(r) {
   return { id: r.id, buyerName: r.buyer_name, cnpj: r.cnpj, cpf: r.cpf, ie: r.ie, email: r.email, phone: r.phone,
-    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username, cep: r.cep, whatsapp: r.whatsapp };
+    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username, cep: r.cep, whatsapp: r.whatsapp,
+    razaoSocial: r.razao_social };
 }
 
 function orderToRow(o) {
@@ -624,6 +626,7 @@ const SEED_PRODUCTS = [
 
 const CLIENT_FIELDS = [
   { key: "buyerName", label: "Nome da(o) responsável por compras" },
+  { key: "razaoSocial", label: "Razão Social" },
   { key: "cnpj", label: "CNPJ" },
   { key: "ie", label: "Inscrição Estadual" },
   { key: "cpf", label: "CPF" },
@@ -2083,7 +2086,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
     : repFilter === "__none__" ? clients.filter((c) => !c.repUsername)
     : clients.filter((c) => c.repUsername === repFilter);
 
-  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", email: "", phone: "", whatsapp: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", razaoSocial: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", email: "", phone: "", whatsapp: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
   function startEdit(c) { setEditing({ ...c }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este cliente do cadastro?")) setClients(clients.filter((c) => c.id !== id)); }
   function save(c) {
@@ -2095,7 +2098,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
   async function exportarExcel() {
     const XLSX = await loadXLSX();
     const rows = visible.map((c) => ({
-      "Nome/Empresa": c.buyerName, "CNPJ": c.cnpj || "", "CPF": c.cpf || "", "IE": c.ie || "", "CEP": c.cep || "",
+      "Nome/Empresa": c.buyerName, "Razão Social": c.razaoSocial || "", "CNPJ": c.cnpj || "", "CPF": c.cpf || "", "IE": c.ie || "", "CEP": c.cep || "",
       "E-mail": c.email || "", "Telefone": c.phone || "", "WhatsApp": c.whatsapp || "", "Endereço": c.address || "",
       "Instagram": c.instagram || "", "Referências": c.references || "", "Representante": repName(c.repUsername),
     }));
@@ -2291,6 +2294,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
 function ClientForm({ initial, onCancel, onSave }) {
   const [c, setC] = useState(initial);
   const [buscando, setBuscando] = useState("");
+  const [erros, setErros] = useState({});
 
   async function handleCnpjChange(value) {
     const masked = maskCNPJ(value);
@@ -2303,7 +2307,7 @@ function ClientForm({ initial, onCancel, onSave }) {
       if (dados) {
         setC((s) => ({
           ...s,
-          buyerName: s.buyerName || dados.razao_social || dados.nome_fantasia || s.buyerName,
+          razaoSocial: s.razaoSocial || dados.razao_social || dados.nome_fantasia || s.razaoSocial,
           cep: s.cep || (dados.cep ? maskCEP(String(dados.cep)) : s.cep),
           address: s.address || [dados.logradouro, dados.numero, dados.bairro, dados.municipio, dados.uf].filter(Boolean).join(", "),
         }));
@@ -2325,6 +2329,14 @@ function ClientForm({ initial, onCancel, onSave }) {
     }
   }
 
+  function trySave() {
+    const novosErros = {};
+    CLIENT_FIELDS.forEach((f) => { if (!c[f.key] || !String(c[f.key]).trim()) novosErros[f.key] = true; });
+    setErros(novosErros);
+    if (Object.keys(novosErros).length > 0) return;
+    onSave(c);
+  }
+
   return (
     <div style={overlayStyle}>
       <div style={{ ...modalStyle, maxWidth: 560 }}>
@@ -2333,24 +2345,36 @@ function ClientForm({ initial, onCancel, onSave }) {
           <button onClick={onCancel} style={iconBtnStyle}><X size={18} /></button>
         </div>
         <div style={{ padding: 20, maxHeight: "72vh", overflowY: "auto" }}>
-          {CLIENT_FIELDS.map((f) => (
-            <div key={f.key}>
-              <FieldLabel>{f.label} {buscando === f.key && <span style={{ color: TOKENS.wine, fontWeight: 400 }}>· buscando...</span>}</FieldLabel>
-              {f.key === "references" ? (
-                <textarea value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} />
-              ) : f.key === "cnpj" ? (
-                <input value={c.cnpj || ""} onChange={(e) => handleCnpjChange(e.target.value)} placeholder="Só os números" style={inputStyle} />
-              ) : f.key === "cep" ? (
-                <input value={c.cep || ""} onChange={(e) => handleCepChange(e.target.value)} placeholder="Só os números" style={inputStyle} />
-              ) : (
-                <input value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={inputStyle} />
-              )}
+          {Object.keys(erros).length > 0 && (
+            <div style={{ background: "#FCEBEB", color: "#791F1F", fontSize: 12.5, padding: "8px 12px", borderRadius: 4, marginBottom: 14 }}>
+              Preencha todos os campos marcados com * antes de salvar.
             </div>
-          ))}
+          )}
+          {CLIENT_FIELDS.map((f) => {
+            const comErro = !!erros[f.key];
+            const estilo = comErro ? { ...inputStyle, border: "1px solid #A5453F", background: "#FCEBEB" } : inputStyle;
+            return (
+              <div key={f.key}>
+                <FieldLabel>
+                  {f.label} <span style={{ color: "#A5453F" }}>*</span> {buscando === f.key && <span style={{ color: TOKENS.wine, fontWeight: 400 }}>· buscando...</span>}
+                </FieldLabel>
+                {f.key === "references" ? (
+                  <textarea value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={{ ...estilo, minHeight: 60, resize: "vertical" }} />
+                ) : f.key === "cnpj" ? (
+                  <input value={c.cnpj || ""} onChange={(e) => handleCnpjChange(e.target.value)} placeholder="Só os números" style={estilo} />
+                ) : f.key === "cep" ? (
+                  <input value={c.cep || ""} onChange={(e) => handleCepChange(e.target.value)} placeholder="Só os números" style={estilo} />
+                ) : (
+                  <input value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={estilo} />
+                )}
+                {comErro && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 2, marginBottom: 4 }}>Este campo é obrigatório.</div>}
+              </div>
+            );
+          })}
         </div>
         <div style={modalFooterStyle}>
           <button onClick={onCancel} style={btnGhostSmall}>Cancelar</button>
-          <button onClick={() => onSave(c)} style={btnPrimary} disabled={!c.buyerName.trim()}><Check size={15} /> Salvar cliente</button>
+          <button onClick={trySave} style={btnPrimary}><Check size={15} /> Salvar cliente</button>
         </div>
       </div>
     </div>
