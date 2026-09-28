@@ -41,11 +41,11 @@ function rowToBanner(r) { return { id: r.id, url: r.url }; }
 function clientToRow(c) {
   return { id: c.id, buyer_name: c.buyerName, cnpj: c.cnpj || null, cpf: c.cpf || null, ie: c.ie || null,
     email: c.email || null, phone: c.phone || null, address: c.address || null, instagram: c.instagram || null,
-    client_references: c.references || null, rep_username: c.repUsername || null };
+    client_references: c.references || null, rep_username: c.repUsername || null, cep: c.cep || null };
 }
 function rowToClient(r) {
   return { id: r.id, buyerName: r.buyer_name, cnpj: r.cnpj, cpf: r.cpf, ie: r.ie, email: r.email, phone: r.phone,
-    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username };
+    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username, cep: r.cep };
 }
 
 function orderToRow(o) {
@@ -627,12 +627,46 @@ const CLIENT_FIELDS = [
   { key: "cnpj", label: "CNPJ" },
   { key: "ie", label: "Inscrição Estadual" },
   { key: "cpf", label: "CPF" },
+  { key: "cep", label: "CEP" },
   { key: "address", label: "Endereço" },
   { key: "email", label: "E-mail" },
   { key: "phone", label: "Telefone" },
   { key: "instagram", label: "Instagram" },
   { key: "references", label: "Referências comerciais" },
 ];
+
+// Aplica a máscara enquanto digita — só números entram, os pontos/traço/barra
+// aparecem sozinhos.
+function maskCNPJ(v) {
+  const d = v.replace(/\D/g, "").slice(0, 14);
+  if (d.length > 12) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})/, "$1.$2.$3/$4-$5");
+  if (d.length > 8) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{0,4})/, "$1.$2.$3/$4");
+  if (d.length > 5) return d.replace(/^(\d{2})(\d{3})(\d{0,3})/, "$1.$2.$3");
+  if (d.length > 2) return d.replace(/^(\d{2})(\d{0,3})/, "$1.$2");
+  return d;
+}
+function maskCEP(v) {
+  const d = v.replace(/\D/g, "").slice(0, 8);
+  if (d.length > 5) return d.replace(/^(\d{5})(\d{0,3})/, "$1-$2");
+  return d;
+}
+// Busca gratuita: CEP na ViaCEP, CNPJ na BrasilAPI (que puxa da Receita
+// Federal) — as duas são públicas, sem chave, padrão no Brasil pra isso.
+async function buscarCEP(cepDigits) {
+  try {
+    const res = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+    const data = await res.json();
+    if (data.erro) return null;
+    return data;
+  } catch { return null; }
+}
+async function buscarCNPJ(cnpjDigits) {
+  try {
+    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjDigits}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
 
 export default function App() {
   const [booted, setBooted] = useState(false);
@@ -2048,7 +2082,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
     : repFilter === "__none__" ? clients.filter((c) => !c.repUsername)
     : clients.filter((c) => c.repUsername === repFilter);
 
-  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", cnpj: "", ie: "", cpf: "", address: "", email: "", phone: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", email: "", phone: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
   function startEdit(c) { setEditing({ ...c }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este cliente do cadastro?")) setClients(clients.filter((c) => c.id !== id)); }
   function save(c) {
@@ -2060,7 +2094,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
   async function exportarExcel() {
     const XLSX = await loadXLSX();
     const rows = visible.map((c) => ({
-      "Nome/Empresa": c.buyerName, "CNPJ": c.cnpj || "", "CPF": c.cpf || "", "IE": c.ie || "",
+      "Nome/Empresa": c.buyerName, "CNPJ": c.cnpj || "", "CPF": c.cpf || "", "IE": c.ie || "", "CEP": c.cep || "",
       "E-mail": c.email || "", "Telefone": c.phone || "", "Endereço": c.address || "",
       "Instagram": c.instagram || "", "Referências": c.references || "", "Representante": repName(c.repUsername),
     }));
@@ -2255,6 +2289,42 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
 
 function ClientForm({ initial, onCancel, onSave }) {
   const [c, setC] = useState(initial);
+  const [buscando, setBuscando] = useState("");
+
+  async function handleCnpjChange(value) {
+    const masked = maskCNPJ(value);
+    setC((s) => ({ ...s, cnpj: masked }));
+    const digits = masked.replace(/\D/g, "");
+    if (digits.length === 14) {
+      setBuscando("cnpj");
+      const dados = await buscarCNPJ(digits);
+      setBuscando("");
+      if (dados) {
+        setC((s) => ({
+          ...s,
+          buyerName: s.buyerName || dados.razao_social || dados.nome_fantasia || s.buyerName,
+          cep: s.cep || (dados.cep ? maskCEP(String(dados.cep)) : s.cep),
+          address: s.address || [dados.logradouro, dados.numero, dados.bairro, dados.municipio, dados.uf].filter(Boolean).join(", "),
+          phone: s.phone || (dados.ddd_telefone_1 || ""),
+        }));
+      }
+    }
+  }
+
+  async function handleCepChange(value) {
+    const masked = maskCEP(value);
+    setC((s) => ({ ...s, cep: masked }));
+    const digits = masked.replace(/\D/g, "");
+    if (digits.length === 8) {
+      setBuscando("cep");
+      const dados = await buscarCEP(digits);
+      setBuscando("");
+      if (dados) {
+        setC((s) => ({ ...s, address: [dados.logradouro, dados.bairro, dados.localidade, dados.uf].filter(Boolean).join(", ") }));
+      }
+    }
+  }
+
   return (
     <div style={overlayStyle}>
       <div style={{ ...modalStyle, maxWidth: 560 }}>
@@ -2265,9 +2335,13 @@ function ClientForm({ initial, onCancel, onSave }) {
         <div style={{ padding: 20, maxHeight: "72vh", overflowY: "auto" }}>
           {CLIENT_FIELDS.map((f) => (
             <div key={f.key}>
-              <FieldLabel>{f.label}</FieldLabel>
+              <FieldLabel>{f.label} {buscando === f.key && <span style={{ color: TOKENS.wine, fontWeight: 400 }}>· buscando...</span>}</FieldLabel>
               {f.key === "references" ? (
                 <textarea value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} />
+              ) : f.key === "cnpj" ? (
+                <input value={c.cnpj || ""} onChange={(e) => handleCnpjChange(e.target.value)} placeholder="Só os números" style={inputStyle} />
+              ) : f.key === "cep" ? (
+                <input value={c.cep || ""} onChange={(e) => handleCepChange(e.target.value)} placeholder="Só os números" style={inputStyle} />
               ) : (
                 <input value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={inputStyle} />
               )}
