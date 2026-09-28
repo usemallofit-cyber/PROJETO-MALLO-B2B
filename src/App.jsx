@@ -41,11 +41,11 @@ function rowToBanner(r) { return { id: r.id, url: r.url }; }
 function clientToRow(c) {
   return { id: c.id, buyer_name: c.buyerName, cnpj: c.cnpj || null, cpf: c.cpf || null, ie: c.ie || null,
     email: c.email || null, phone: c.phone || null, address: c.address || null, instagram: c.instagram || null,
-    client_references: c.references || null, rep_username: c.repUsername || null, cep: c.cep || null };
+    client_references: c.references || null, rep_username: c.repUsername || null, cep: c.cep || null, whatsapp: c.whatsapp || null };
 }
 function rowToClient(r) {
   return { id: r.id, buyerName: r.buyer_name, cnpj: r.cnpj, cpf: r.cpf, ie: r.ie, email: r.email, phone: r.phone,
-    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username, cep: r.cep };
+    address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username, cep: r.cep, whatsapp: r.whatsapp };
 }
 
 function orderToRow(o) {
@@ -631,6 +631,7 @@ const CLIENT_FIELDS = [
   { key: "address", label: "Endereço" },
   { key: "email", label: "E-mail" },
   { key: "phone", label: "Telefone" },
+  { key: "whatsapp", label: "WhatsApp" },
   { key: "instagram", label: "Instagram" },
   { key: "references", label: "Referências comerciais" },
 ];
@@ -2082,7 +2083,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
     : repFilter === "__none__" ? clients.filter((c) => !c.repUsername)
     : clients.filter((c) => c.repUsername === repFilter);
 
-  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", email: "", phone: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", email: "", phone: "", whatsapp: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
   function startEdit(c) { setEditing({ ...c }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este cliente do cadastro?")) setClients(clients.filter((c) => c.id !== id)); }
   function save(c) {
@@ -2095,7 +2096,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
     const XLSX = await loadXLSX();
     const rows = visible.map((c) => ({
       "Nome/Empresa": c.buyerName, "CNPJ": c.cnpj || "", "CPF": c.cpf || "", "IE": c.ie || "", "CEP": c.cep || "",
-      "E-mail": c.email || "", "Telefone": c.phone || "", "Endereço": c.address || "",
+      "E-mail": c.email || "", "Telefone": c.phone || "", "WhatsApp": c.whatsapp || "", "Endereço": c.address || "",
       "Instagram": c.instagram || "", "Referências": c.references || "", "Representante": repName(c.repUsername),
     }));
     downloadXLSX(XLSX, rows, "Clientes", `clientes-mallo-${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -2305,7 +2306,6 @@ function ClientForm({ initial, onCancel, onSave }) {
           buyerName: s.buyerName || dados.razao_social || dados.nome_fantasia || s.buyerName,
           cep: s.cep || (dados.cep ? maskCEP(String(dados.cep)) : s.cep),
           address: s.address || [dados.logradouro, dados.numero, dados.bairro, dados.municipio, dados.uf].filter(Boolean).join(", "),
-          phone: s.phone || (dados.ddd_telefone_1 || ""),
         }));
       }
     }
