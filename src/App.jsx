@@ -16,6 +16,24 @@ const TOKENS = {
 
 const SIZES = ["P", "M", "G", "GG"];
 const DEFAULT_CATEGORIES = ["Conjunto de Short", "Conjunto de Calça", "Macaquinhos", "KIT's"];
+
+// Áreas do Painel ADM que podem ser ligadas/desligadas por login de
+// funcionário — usado no montador de login (Login de Funcionários) e pra
+// filtrar as abas que cada um vê.
+const PERMISSION_AREAS = [
+  { id: "produtos", label: "Produtos & Estoque" },
+  { id: "itens", label: "Listagem de itens" },
+  { id: "coleta", label: "Coleta e Estoque" },
+  { id: "relatorios-corte", label: "Relatórios Estoque e Corte" },
+  { id: "catalogo-modelos", label: "Catálogo de Modelos" },
+  { id: "pedidos", label: "Pedidos" },
+  { id: "clientes", label: "Clientes (Cadastro)" },
+  { id: "login-clientes", label: "Login de Clientes" },
+  { id: "representantes", label: "Login de Representantes" },
+  { id: "banners", label: "Banners" },
+  { id: "config", label: "Configurações" },
+];
+const ALL_PERMISSION_IDS = PERMISSION_AREAS.map((a) => a.id);
 const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const STORE_KEYS = {
   users: "catalog_users_v5", products: "catalog_products_v5", banners: "catalog_banners_v5",
@@ -706,7 +724,7 @@ export default function App() {
       withRetry(() => supabase.from("cut_batches").select("*")),
     ]);
     const finalUsers = {};
-    (profRows.data || []).forEach((p) => { finalUsers[p.username] = { name: p.name, role: p.role, access: p.access, authEmail: AUTH_EMAIL_OVERRIDES[p.username] || `${p.username}@mallo.internal` }; });
+    (profRows.data || []).forEach((p) => { finalUsers[p.username] = { name: p.name, role: p.role, access: p.access, permissions: p.permissions, authEmail: AUTH_EMAIL_OVERRIDES[p.username] || `${p.username}@mallo.internal` }; });
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
@@ -1794,8 +1812,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 
 /* ---------------- ADMIN (funcionário) ---------------- */
 function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte }) {
-  const [tab, setTab] = useState("produtos");
-  const tabs = [
+  const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
     { id: "coleta", label: "Coleta e Estoque", icon: ScanBarcode },
@@ -1808,6 +1825,11 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
     { id: "banners", label: "Banners", icon: GalleryHorizontal },
     { id: "config", label: "Configurações", icon: SettingsIcon },
   ];
+  // admincentral sempre vê tudo; funcionário com permissões personalizadas
+  // só vê as abas que foram liberadas pra aquele login específico.
+  const perms = session?.permissions;
+  const tabs = (session?.role === "admincentral" || !perms) ? tabsAll : tabsAll.filter((t) => perms.includes(t.id));
+  const [tab, setTab] = useState(tabs[0]?.id || "produtos");
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 24px 80px" }}>
       <div style={{ display: "flex", gap: 6, marginBottom: 26, borderBottom: `1px solid ${TOKENS.line}`, flexWrap: "wrap" }}>
@@ -3623,11 +3645,17 @@ function VariantEditor({ v, onChange, onRemove, onAddImages, onRemoveImage, onSe
 function ClientesAdmin({ users, setUsers, role, title }) {
   const [name, setName] = useState("");
   const [access, setAccess] = useState("atacado");
+  const [permissions, setPermissions] = useState(ALL_PERMISSION_IDS);
   const [lastGenerated, setLastGenerated] = useState(null);
   const [copiedKey, setCopiedKey] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
   const [revokingId, setRevokingId] = useState("");
+  const [editingPerms, setEditingPerms] = useState(null); // username sendo editado, ou null
+
+  function togglePerm(id) {
+    setPermissions((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+  }
 
   // Cria o login de verdade (Supabase Auth) através de uma função no
   // servidor — o app nunca manuseia a criação de contas diretamente, já que
@@ -3635,21 +3663,24 @@ function ClientesAdmin({ users, setUsers, role, title }) {
   // no navegador.
   async function generate() {
     if (!name.trim()) { setCreateError("Preencha o nome antes de gerar o login."); return; }
+    if (role === "admin" && permissions.length === 0) { setCreateError("Selecione ao menos uma área de acesso para este funcionário."); return; }
     setCreateError("");
     const base = name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, ".").replace(/(^\.|\.$)/g, "");
     let username = base || uid(role === "representante" ? "rep_" : role === "admin" ? "func_" : "cli_");
     let n = 1;
     while (users[username]) { username = `${base}${n}`; n++; }
     const finalAccess = role === "representante" ? "atacado" : access;
+    const finalPerms = role === "admin" ? permissions : undefined;
     setCreating(true);
     const { data, error } = await withRetry(() => supabase.functions.invoke("staff-accounts", {
-      body: { action: "create", username, name: name.trim(), role, access: finalAccess },
+      body: { action: "create", username, name: name.trim(), role, access: finalAccess, permissions: finalPerms },
     }));
     setCreating(false);
     if (error || data?.error) { setCreateError(data?.error || "Não foi possível criar o login agora. Tente novamente."); return; }
-    setUsers({ ...users, [data.username]: { name: data.name, role, access: data.access, authEmail: `${data.username}@mallo.internal` } });
+    setUsers({ ...users, [data.username]: { name: data.name, role, access: data.access, permissions: data.permissions, authEmail: `${data.username}@mallo.internal` } });
     setLastGenerated({ username: data.username, password: data.password, name: data.name, access: data.access });
     setName("");
+    setPermissions(ALL_PERMISSION_IDS);
   }
   async function revoke(username) {
     if (!confirm(`Revogar acesso de "${username}"?`)) return;
@@ -3666,6 +3697,12 @@ function ClientesAdmin({ users, setUsers, role, title }) {
     setRevokingId("");
     if (error || data?.error) { alert(data?.error || "Não foi possível redefinir a senha agora. Tente novamente."); return; }
     setLastGenerated({ username: data.username, password: data.password, name: data.name, access: data.access });
+  }
+  async function savePermissions(username, newPerms) {
+    const { data, error } = await withRetry(() => supabase.functions.invoke("staff-accounts", { body: { action: "update_permissions", username, permissions: newPerms } }));
+    if (error || data?.error) { alert(data?.error || "Não foi possível salvar as permissões agora."); return; }
+    setUsers({ ...users, [username]: { ...users[username], permissions: newPerms } });
+    setEditingPerms(null);
   }
   function copy(text, key) { navigator.clipboard?.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(""), 1200); }
 
@@ -3688,7 +3725,23 @@ function ClientesAdmin({ users, setUsers, role, title }) {
           </>
         )}
         {role === "representante" && <div style={{ fontSize: 11, color: TOKENS.graphite, margin: "6px 0 14px" }}>Representantes sempre veem a vitrine com preços, para montar pedidos junto aos clientes.</div>}
-        {role === "admin" && <div style={{ fontSize: 11, color: TOKENS.graphite, margin: "6px 0 14px" }}>Funcionários acessam o Painel ADM normalmente, mas sem preço de custo nem os relatórios gerenciais (isso fica só no Painel Central).</div>}
+        {role === "admin" && (
+          <>
+            <FieldLabel>O que este login vai poder acessar</FieldLabel>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 4 }}>
+              <button type="button" onClick={() => setPermissions(ALL_PERMISSION_IDS)} style={{ background: "none", border: "none", color: TOKENS.wine, fontSize: 11, cursor: "pointer", padding: 0 }}>Marcar tudo</button>
+              <button type="button" onClick={() => setPermissions([])} style={{ background: "none", border: "none", color: TOKENS.graphite, fontSize: 11, cursor: "pointer", padding: 0 }}>Limpar</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14, maxHeight: 220, overflowY: "auto", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 10 }}>
+              {PERMISSION_AREAS.map((area) => (
+                <label key={area.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: TOKENS.ink, cursor: "pointer" }}>
+                  <input type="checkbox" checked={permissions.includes(area.id)} onChange={() => togglePerm(area.id)} />
+                  {area.label}
+                </label>
+              ))}
+            </div>
+          </>
+        )}
         <button onClick={generate} disabled={creating} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: creating ? 0.7 : 1 }}><Plus size={15} /> {creating ? "Gerando..." : "Gerar login"}</button>
         {createError && <div style={{ fontSize: 11.5, color: "#A5453F", marginTop: 8 }}>{createError}</div>}
 
@@ -3706,18 +3759,50 @@ function ClientesAdmin({ users, setUsers, role, title }) {
         <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
           {entries.length === 0 && <div style={{ padding: 20, color: TOKENS.graphite, fontSize: 13 }}>Nenhum login gerado ainda.</div>}
           {entries.map(([username, u]) => (
-            <div key={username} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
-              <div>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{u.name}</div>
-                <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>login: {username}{role === "client" ? ` · ${u.access === "atacado" ? "vê preços" : "somente fotos"}` : ""}</div>
+            <div key={username} style={{ padding: "12px 16px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{u.name}</div>
+                  <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>
+                    login: {username}{role === "client" ? ` · ${u.access === "atacado" ? "vê preços" : "somente fotos"}` : ""}
+                    {role === "admin" && (u.permissions ? ` · ${u.permissions.length} de ${PERMISSION_AREAS.length} áreas` : " · acesso total")}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {role === "admin" && <button onClick={() => setEditingPerms(editingPerms === username ? null : username)} style={btnGhostSmall}><ShieldCheck size={13} /> Permissões</button>}
+                  <button onClick={() => resetPassword(username)} disabled={revokingId === username} style={btnGhostSmall}><Lock size={13} /> Redefinir senha</button>
+                  <button onClick={() => revoke(username)} disabled={revokingId === username} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> {revokingId === username ? "Revogando..." : "Revogar"}</button>
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => resetPassword(username)} disabled={revokingId === username} style={btnGhostSmall}><Lock size={13} /> Redefinir senha</button>
-                <button onClick={() => revoke(username)} disabled={revokingId === username} style={{ ...btnGhostSmall, color: "#A5453F" }}><Trash2 size={13} /> {revokingId === username ? "Revogando..." : "Revogar"}</button>
-              </div>
+              {editingPerms === username && <EditPermissoesInline current={u.permissions || ALL_PERMISSION_IDS} onSave={(perms) => savePermissions(username, perms)} onCancel={() => setEditingPerms(null)} />}
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function EditPermissoesInline({ current, onSave, onCancel }) {
+  const [perms, setPerms] = useState(current);
+  function toggle(id) { setPerms((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]); }
+  return (
+    <div style={{ marginTop: 10, background: TOKENS.ivorySoft, borderRadius: 4, padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 6 }}>
+        <button type="button" onClick={() => setPerms(ALL_PERMISSION_IDS)} style={{ background: "none", border: "none", color: TOKENS.wine, fontSize: 11, cursor: "pointer", padding: 0 }}>Marcar tudo</button>
+        <button type="button" onClick={() => setPerms([])} style={{ background: "none", border: "none", color: TOKENS.graphite, fontSize: 11, cursor: "pointer", padding: 0 }}>Limpar</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 10 }}>
+        {PERMISSION_AREAS.map((area) => (
+          <label key={area.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: TOKENS.ink, cursor: "pointer" }}>
+            <input type="checkbox" checked={perms.includes(area.id)} onChange={() => toggle(area.id)} />
+            {area.label}
+          </label>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => onSave(perms)} style={{ ...btnPrimary, padding: "6px 14px", fontSize: 12 }} disabled={perms.length === 0}><Check size={13} /> Salvar</button>
+        <button onClick={onCancel} style={btnGhostSmall}>Cancelar</button>
       </div>
     </div>
   );
