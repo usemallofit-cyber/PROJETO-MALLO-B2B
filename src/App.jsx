@@ -440,6 +440,83 @@ async function buildItemLabelsPdfBlob(entries) {
 // de uma lista de itens de pedido. Usado tanto no carrinho do cliente quanto na
 // aba Pedidos do painel — troca window.print() (que duplicava página) por um PDF
 // de verdade, que também pode ser anexado no compartilhamento do WhatsApp.
+// Gera um catálogo em PDF com todo o estoque atual — uma linha por
+// produto/cor, com a foto principal, e a quantidade de cada tamanho
+// separada em Pronta entrega e Em produção (só mostra a segunda linha
+// quando existir algo em produção pra aquela cor).
+async function buildCatalogPdfBlob(products) {
+  const jsPDF = await loadJsPDF();
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 32, marginTop = 60, marginBottom = 40;
+  const cols = 3;
+  const gap = 14;
+  const cardW = (pageWidth - marginX * 2 - gap * (cols - 1)) / cols;
+  const cardH = 210;
+  let x = marginX, y = marginTop, col = 0;
+
+  function drawHeader() {
+    doc.setFont("times", "bold"); doc.setFontSize(16); doc.setTextColor(23, 22, 26);
+    doc.text("Catálogo Mallo — disponível agora", marginX, 36);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(90, 86, 76);
+    doc.text(new Date().toLocaleString("pt-BR"), marginX, 50);
+  }
+  drawHeader();
+
+  const rows = [];
+  products.forEach((p) => {
+    (p.variants || []).forEach((v) => {
+      const pronta = SIZES.reduce((a, s) => a + (v.stock?.[s] || 0), 0);
+      const producao = SIZES.reduce((a, s) => a + (v.stockProducao?.[s] || 0), 0);
+      if (!pronta && !producao) return;
+      rows.push({ p, v, pronta, producao });
+    });
+  });
+
+  for (const { p, v, pronta, producao } of rows) {
+    if (y + cardH > pageHeight - marginBottom) {
+      doc.addPage(); x = marginX; y = marginTop; col = 0; drawHeader();
+    }
+    doc.setDrawColor(220, 210, 190);
+    doc.rect(x, y, cardW, cardH);
+    const img = v.images && v.images[0];
+    const imgH = 130;
+    if (img) {
+      try {
+        const el = await new Promise((res, rej) => { const im = new window.Image(); im.onload = () => res(im); im.onerror = rej; im.src = img; });
+        doc.addImage(el, "JPEG", x + 4, y + 4, cardW - 8, imgH);
+      } catch (e) { console.error("Catálogo: falha ao carregar foto", p.model, e); }
+    } else {
+      doc.setFillColor(240, 236, 226);
+      doc.rect(x + 4, y + 4, cardW - 8, imgH, "F");
+    }
+    let ty = y + imgH + 18;
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(23, 22, 26);
+    doc.text(p.model, x + 6, ty, { maxWidth: cardW - 12 });
+    ty += 13;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(90, 86, 76);
+    doc.text(`${v.color || "—"}${p.category ? " · " + p.category : ""}`, x + 6, ty, { maxWidth: cardW - 12 });
+    ty += 13;
+    if (pronta > 0) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(39, 80, 10);
+      doc.text(`Pronta: ${SIZES.map((s) => `${s} ${v.stock?.[s] || 0}`).join(" · ")}`, x + 6, ty, { maxWidth: cardW - 12 });
+      ty += 11;
+    }
+    if (producao > 0) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(99, 56, 6);
+      doc.text(`Produção: ${SIZES.map((s) => `${s} ${v.stockProducao?.[s] || 0}`).join(" · ")}`, x + 6, ty, { maxWidth: cardW - 12 });
+    }
+
+    col++;
+    if (col >= cols) { col = 0; x = marginX; y += cardH + gap; }
+    else { x += cardW + gap; }
+  }
+
+  return doc.output("blob");
+}
+
+
 async function buildOrderPdfBlob(items, session, showPrice, client, note) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: "pt", format: "a4" });
@@ -3358,6 +3435,21 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
     downloadXLSX(XLSX, rows, "Estoque", `estoque-mallo-${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
+  const [gerandoCatalogo, setGerandoCatalogo] = useState(false);
+  async function baixarCatalogoPdf() {
+    setGerandoCatalogo(true);
+    try {
+      const blob = await buildCatalogPdfBlob(list);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `catalogo-mallo-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`Não foi possível gerar o catálogo agora.\nDetalhe do erro: ${e?.message || e}`);
+    } finally { setGerandoCatalogo(false); }
+  }
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -3367,6 +3459,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
             <option>Todas</option>
             {categories.map((c) => <option key={c}>{c}</option>)}
           </select>
+          <button onClick={baixarCatalogoPdf} disabled={gerandoCatalogo} style={btnGhostSmall}><Printer size={13} /> {gerandoCatalogo ? "Gerando..." : "Catálogo (PDF)"}</button>
           <button onClick={exportarEstoqueExcel} style={btnGhostSmall}><Download size={13} /> Exportar Excel</button>
           <button onClick={startNew} style={btnPrimary}><Plus size={15} /> Novo modelo</button>
         </div>
