@@ -453,7 +453,7 @@ async function buildCatalogPdfBlob(products) {
   const cols = 3;
   const gap = 14;
   const cardW = (pageWidth - marginX * 2 - gap * (cols - 1)) / cols;
-  const cardH = 210;
+  const cardH = 195;
   let x = marginX, y = marginTop, col = 0;
 
   function drawHeader() {
@@ -464,23 +464,25 @@ async function buildCatalogPdfBlob(products) {
   }
   drawHeader();
 
+  // Uma linha por produto — só mostra as cores que têm alguma disponibilidade
+  // (pronta ou em produção), sem números de estoque, só a bolinha da cor.
   const rows = [];
   products.forEach((p) => {
-    (p.variants || []).forEach((v) => {
+    const coresDisponiveis = (p.variants || []).filter((v) => {
       const pronta = SIZES.reduce((a, s) => a + (v.stock?.[s] || 0), 0);
       const producao = SIZES.reduce((a, s) => a + (v.stockProducao?.[s] || 0), 0);
-      if (!pronta && !producao) return;
-      rows.push({ p, v, pronta, producao });
+      return pronta > 0 || producao > 0;
     });
+    if (coresDisponiveis.length) rows.push({ p, cores: coresDisponiveis });
   });
 
-  for (const { p, v, pronta, producao } of rows) {
+  for (const { p, cores } of rows) {
     if (y + cardH > pageHeight - marginBottom) {
       doc.addPage(); x = marginX; y = marginTop; col = 0; drawHeader();
     }
     doc.setDrawColor(220, 210, 190);
     doc.rect(x, y, cardW, cardH);
-    const img = v.images && v.images[0];
+    const img = cores[0].images && cores[0].images[0];
     const imgH = 130;
     if (img) {
       try {
@@ -495,18 +497,24 @@ async function buildCatalogPdfBlob(products) {
     doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(23, 22, 26);
     doc.text(p.model, x + 6, ty, { maxWidth: cardW - 12 });
     ty += 13;
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(90, 86, 76);
-    doc.text(`${v.color || "—"}${p.category ? " · " + p.category : ""}`, x + 6, ty, { maxWidth: cardW - 12 });
-    ty += 13;
-    if (pronta > 0) {
-      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(39, 80, 10);
-      doc.text(`Pronta: ${SIZES.map((s) => `${s} ${v.stock?.[s] || 0}`).join(" · ")}`, x + 6, ty, { maxWidth: cardW - 12 });
-      ty += 11;
+    if (p.category) {
+      doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(90, 86, 76);
+      doc.text(p.category, x + 6, ty, { maxWidth: cardW - 12 });
+      ty += 14;
+    } else {
+      ty += 4;
     }
-    if (producao > 0) {
-      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(99, 56, 6);
-      doc.text(`Produção: ${SIZES.map((s) => `${s} ${v.stockProducao?.[s] || 0}`).join(" · ")}`, x + 6, ty, { maxWidth: cardW - 12 });
-    }
+    // Bolinhas de cor, lado a lado
+    let bx = x + 8;
+    const dotR = 5;
+    cores.forEach((v) => {
+      const hex = v.hex || "#CCCCCC";
+      const rgb = [parseInt(hex.slice(1, 3), 16) || 0, parseInt(hex.slice(3, 5), 16) || 0, parseInt(hex.slice(5, 7), 16) || 0];
+      doc.setFillColor(...rgb);
+      doc.setDrawColor(180, 170, 150);
+      doc.circle(bx, ty, dotR, "FD");
+      bx += dotR * 2 + 6;
+    });
 
     col++;
     if (col >= cols) { col = 0; x = marginX; y += cardH + gap; }
@@ -515,6 +523,7 @@ async function buildCatalogPdfBlob(products) {
 
   return doc.output("blob");
 }
+
 
 
 async function buildOrderPdfBlob(items, session, showPrice, client, note) {
