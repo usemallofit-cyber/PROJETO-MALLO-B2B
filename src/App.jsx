@@ -1146,7 +1146,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -1811,7 +1811,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -1844,7 +1844,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
@@ -2626,7 +2626,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, settings, cutBatches, lancarCorte, garantirProdutoVariante, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -2636,7 +2636,7 @@ function ColetaEstoqueAdmin({ orders, products, settings, cutBatches, lancarCort
   if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onView={(o) => { setActiveOrder(o); setMode("ver-pedido"); }} onBack={() => setMode("menu")} />;
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
-  if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} onBack={() => setMode("menu")} />;
+  if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} persistProducts={persistProducts} onBack={() => setMode("menu")} />;
   if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
@@ -2870,12 +2870,14 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   );
 }
 
-function LancarCorteView({ products, categories, lancarCorte, garantirProdutoVariante, onBack }) {
+function novaEntradaCor() {
+  return { key: uid("ce_"), variantId: "", novaCor: false, colorName: "", hex: "#7A2E38", images: [], sizeQty: { P: 0, M: 0, G: 0, GG: 0 } };
+}
+
+function LancarCorteView({ products, categories, lancarCorte, persistProducts, onBack }) {
   const [novoModelo, setNovoModelo] = useState(false);
   const [productId, setProductId] = useState(products[0]?.id || "");
   const product = products.find((p) => p.id === productId);
-  const [variantId, setVariantId] = useState(product?.variants[0]?.id || "");
-  const [novaCor, setNovaCor] = useState(!product?.variants?.length);
 
   const [model, setModel] = useState("");
   const [sku, setSku] = useState("");
@@ -2884,91 +2886,123 @@ function LancarCorteView({ products, categories, lancarCorte, garantirProdutoVar
   const [price, setPrice] = useState("");
   const [costPrice, setCostPrice] = useState("");
 
-  const [colorName, setColorName] = useState("");
-  const [hex, setHex] = useState("#7A2E38");
-  const [images, setImages] = useState([]);
-  const fileRef = useRef();
-
-  const [sizeQty, setSizeQty] = useState({ P: 0, M: 0, G: 0, GG: 0 });
-  const [lastBatch, setLastBatch] = useState(null);
+  const [colorEntries, setColorEntries] = useState([novaEntradaCor()]);
+  const [lastBatches, setLastBatches] = useState(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!novoModelo) {
       const firstVariant = product?.variants[0];
-      setVariantId(firstVariant?.id || "");
-      setNovaCor(!product?.variants?.length);
-      setImages(firstVariant?.images || []);
+      setColorEntries([{ ...novaEntradaCor(), variantId: firstVariant?.id || "", novaCor: !product?.variants?.length, images: firstVariant?.images || [] }]);
+    } else {
+      setColorEntries([novaEntradaCor()]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId, novoModelo]);
 
-  const totalQty = Object.values(sizeQty).reduce((a, b) => a + (Number(b) || 0), 0);
-
-  async function addImages(fileList) {
-    const files = Array.from(fileList).slice(0, 4 - images.length);
-    const dataUrls = await Promise.all(files.map((f) => fileToCompressedDataUrl(f)));
-    setImages((imgs) => [...imgs, ...dataUrls]);
+  function updateEntry(key, patch) {
+    setColorEntries((entries) => entries.map((en) => en.key === key ? { ...en, ...patch } : en));
   }
-  function removeImage(idx) { setImages((imgs) => imgs.filter((_, i) => i !== idx)); }
+  function addEntry() {
+    setColorEntries((entries) => [...entries, novaEntradaCor()]);
+  }
+  function removeEntry(key) {
+    setColorEntries((entries) => entries.length > 1 ? entries.filter((en) => en.key !== key) : entries);
+  }
+  async function addImagesToEntry(key, fileList, currentImages) {
+    const files = Array.from(fileList).slice(0, 4 - currentImages.length);
+    const dataUrls = await Promise.all(files.map((f) => fileToCompressedDataUrl(f)));
+    updateEntry(key, { images: [...currentImages, ...dataUrls] });
+  }
+
+  const totalGeral = colorEntries.reduce((a, en) => a + Object.values(en.sizeQty).reduce((x, y) => x + (Number(y) || 0), 0), 0);
 
   async function submit(e) {
     e.preventDefault();
-    if (!totalQty) { alert("Informe a quantidade cortada em pelo menos um tamanho."); return; }
+    const entriesValidas = colorEntries.filter((en) => Object.values(en.sizeQty).some((q) => (Number(q) || 0) > 0));
+    if (!entriesValidas.length) { alert("Informe a quantidade cortada em pelo menos um tamanho, em pelo menos uma cor."); return; }
+    if (novoModelo && !model.trim()) { alert("Preencha o nome do modelo."); return; }
+    for (const en of entriesValidas) {
+      if ((novoModelo || en.novaCor) && !en.colorName.trim()) { alert("Preencha o nome de todas as cores novas."); return; }
+    }
 
     setSaving(true);
-    let resolved;
     try {
+      const zeroStock = { P: 0, M: 0, G: 0, GG: 0 };
+      let targetProduct;
+      const variantByKey = {};
+
       if (novoModelo) {
-        if (!model.trim() || !colorName.trim()) { alert("Preencha o nome do modelo e da cor."); return; }
-        resolved = await garantirProdutoVariante({ model: model.trim(), sku: sku.trim(), category, description, price, costPrice, color: colorName.trim(), hex, images });
-      } else if (novaCor) {
-        if (!colorName.trim()) { alert("Preencha o nome da cor."); return; }
-        resolved = await garantirProdutoVariante({ productId, color: colorName.trim(), hex, images });
+        const variants = entriesValidas.map((en) => {
+          const v = { id: uid("v_"), color: en.colorName.trim(), hex: en.hex, images: en.images || [], stock: { ...zeroStock } };
+          variantByKey[en.key] = v;
+          return v;
+        });
+        targetProduct = { id: uid("p_"), model: model.trim(), sku: sku.trim(), category, description, price, costPrice, variants, nextItemSeq: 1 };
+        await persistProdutosDireto(targetProduct, products, null);
       } else {
-        resolved = await garantirProdutoVariante({ productId, variantId, images });
+        const baseProduct = products.find((p) => p.id === productId);
+        if (!baseProduct) { alert("Selecione um produto existente."); setSaving(false); return; }
+        let variants = [...baseProduct.variants];
+        entriesValidas.forEach((en) => {
+          if (en.novaCor) {
+            const v = { id: uid("v_"), color: en.colorName.trim(), hex: en.hex, images: en.images || [], stock: { ...zeroStock } };
+            variants.push(v);
+            variantByKey[en.key] = v;
+          } else {
+            let existing = variants.find((v) => v.id === en.variantId);
+            if (en.images && JSON.stringify(en.images) !== JSON.stringify(existing.images || [])) {
+              variants = variants.map((v) => v.id === existing.id ? { ...v, images: en.images } : v);
+              existing = variants.find((v) => v.id === existing.id);
+            }
+            variantByKey[en.key] = existing;
+          }
+        });
+        targetProduct = { ...baseProduct, variants };
+        await persistProdutosDireto(targetProduct, products, productId);
       }
+
+      const resultados = entriesValidas.map((en) => ({
+        product: targetProduct, variant: variantByKey[en.key],
+        batches: lancarCorte({ product: targetProduct, variant: variantByKey[en.key], sizeQtyMap: en.sizeQty }),
+      }));
+      setLastBatches(resultados);
+      setColorEntries([novaEntradaCor()]);
+      setModel(""); setSku(""); setDescription(""); setPrice(""); setCostPrice("");
     } finally { setSaving(false); }
-    if (!resolved?.product || !resolved?.variant) { alert("Não foi possível identificar o produto/cor. Confira os dados."); return; }
-    const batches = lancarCorte({ product: resolved.product, variant: resolved.variant, sizeQtyMap: sizeQty });
-    setLastBatch({ product: resolved.product, variant: resolved.variant, batches });
-    setSizeQty({ P: 0, M: 0, G: 0, GG: 0 });
-    setColorName(""); setModel(""); setSku(""); setDescription(""); setPrice(""); setCostPrice(""); setImages([]);
   }
 
-  if (lastBatch) return <CorteLancadoConfirmacao lastBatch={lastBatch} onNovoLancamento={() => setLastBatch(null)} onBack={onBack} />;
+  // Grava o produto de uma vez só (todas as cores da leva juntas), em vez de
+  // uma gravação por cor — evita a mesma corrida que já corrigimos antes
+  // (duas gravações rápidas em sequência podiam se sobrescrever).
+  async function persistProdutosDireto(targetProduct, currentProducts, replaceId) {
+    const next = replaceId
+      ? currentProducts.map((p) => p.id === replaceId ? targetProduct : p)
+      : [targetProduct, ...currentProducts];
+    await persistProducts(next);
+  }
+
+  if (lastBatches) return <CorteLancadoConfirmacao lastBatches={lastBatches} onNovoLancamento={() => setLastBatches(null)} onBack={onBack} />;
 
   return (
-    <div style={{ maxWidth: 480 }}>
+    <div style={{ maxWidth: 560 }}>
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0 4px" }}>Lançar corte</div>
-      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Registre o que foi cortado agora. Fica pendente até a aprovação de um administrador.</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Registre o que foi cortado agora — pode lançar várias cores de uma vez. Fica pendente até a aprovação de um administrador.</div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button type="button" onClick={() => setNovoModelo(false)} style={{ flex: 1, padding: "8px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: !novoModelo ? TOKENS.wine : "#fff", color: !novoModelo ? "#fff" : TOKENS.ink, fontSize: 12.5, cursor: "pointer" }}>Modelo existente</button>
         <button type="button" onClick={() => setNovoModelo(true)} style={{ flex: 1, padding: "8px 0", borderRadius: 3, border: `1px solid ${TOKENS.line}`, background: novoModelo ? TOKENS.wine : "#fff", color: novoModelo ? "#fff" : TOKENS.ink, fontSize: 12.5, cursor: "pointer" }}>Modelo novo</button>
       </div>
 
-      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {!novoModelo ? (
-          <>
-            <div>
-              <label style={labelStyle}>Produto</label>
-              <select value={productId} onChange={(e) => setProductId(e.target.value)} style={inputStyle}>
-                {products.map((p) => <option key={p.id} value={p.id}>{p.model}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>Cor</label>
-              <select value={novaCor ? "__nova__" : variantId} onChange={(e) => {
-                if (e.target.value === "__nova__") { setNovaCor(true); setImages([]); }
-                else { setNovaCor(false); setVariantId(e.target.value); setImages(product?.variants.find((v) => v.id === e.target.value)?.images || []); }
-              }} style={inputStyle}>
-                {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
-                <option value="__nova__">+ Nova cor para este modelo</option>
-              </select>
-            </div>
-          </>
+          <div>
+            <label style={labelStyle}>Produto</label>
+            <select value={productId} onChange={(e) => setProductId(e.target.value)} style={inputStyle}>
+              {products.map((p) => <option key={p.id} value={p.id}>{p.model}</option>)}
+            </select>
+          </div>
         ) : (
           <>
             <div>
@@ -3004,64 +3038,88 @@ function LancarCorteView({ products, categories, lancarCorte, garantirProdutoVar
           </>
         )}
 
-        {(novoModelo || novaCor) && (
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Nome da cor</label>
-              <input value={colorName} onChange={(e) => setColorName(e.target.value)} style={inputStyle} placeholder="Ex: Vinho" />
+        {colorEntries.map((en, idx) => (
+          <div key={en.key} style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 14, background: TOKENS.ivorySoft }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4 }}>Cor {idx + 1}</div>
+              {colorEntries.length > 1 && <button type="button" onClick={() => removeEntry(en.key)} style={{ background: "none", border: "none", color: "#A5453F", cursor: "pointer", fontSize: 11 }}><Trash2 size={13} /></button>}
             </div>
-            <input type="color" value={hex} onChange={(e) => setHex(e.target.value)} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
-          </div>
-        )}
 
-        <div>
-          <label style={labelStyle}>Fotos desta cor (até 4 · a 1ª é a principal)</label>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {images.map((img, i) => (
-              <div key={i} style={{ position: "relative", width: 66, height: 84 }}>
-                <img src={img} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 3, border: i === 0 ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}` }} />
-                {i === 0 && <span style={{ position: "absolute", bottom: 2, left: 2, background: TOKENS.wine, color: "#fff", fontSize: 8, padding: "1px 4px", borderRadius: 2 }}>Principal</span>}
-                <button type="button" onClick={() => removeImage(i)} style={{ position: "absolute", top: -6, right: -6, background: TOKENS.wine, color: "#fff", border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 11 }}>×</button>
+            {!novoModelo && (
+              <div style={{ marginBottom: 10 }}>
+                <label style={labelStyle}>Cor</label>
+                <select value={en.novaCor ? "__nova__" : en.variantId} onChange={(e) => {
+                  if (e.target.value === "__nova__") updateEntry(en.key, { novaCor: true, variantId: "", images: [] });
+                  else updateEntry(en.key, { novaCor: false, variantId: e.target.value, images: product?.variants.find((v) => v.id === e.target.value)?.images || [] });
+                }} style={inputStyle}>
+                  {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
+                  <option value="__nova__">+ Nova cor para este modelo</option>
+                </select>
               </div>
-            ))}
-            {images.length < 4 && (
-              <button type="button" onClick={() => fileRef.current.click()} style={{ width: 66, height: 84, border: `1px dashed ${TOKENS.line}`, borderRadius: 3, background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", color: TOKENS.graphite, gap: 4 }}>
-                <Upload size={14} /><span style={{ fontSize: 9.5 }}>Subir</span>
-              </button>
             )}
-            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => e.target.files.length && addImages(e.target.files)} />
-          </div>
-        </div>
 
-        <div>
-          <label style={labelStyle}>Quantidade cortada por tamanho</label>
-          <div style={{ display: "flex", gap: 8 }}>
-            {SIZES.map((s) => (
-              <div key={s} style={{ flex: 1 }}>
-                <div style={{ fontSize: 10.5, textAlign: "center", color: TOKENS.graphite, marginBottom: 3 }}>{s}</div>
-                <input type="number" min={0} value={sizeQty[s]} onChange={(e) => setSizeQty((q) => ({ ...q, [s]: Math.max(0, Number(e.target.value) || 0) }))} style={{ ...inputStyle, textAlign: "center" }} />
+            {(novoModelo || en.novaCor) && (
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Nome da cor</label>
+                  <input value={en.colorName} onChange={(e) => updateEntry(en.key, { colorName: e.target.value })} style={inputStyle} placeholder="Ex: Vinho" />
+                </div>
+                <input type="color" value={en.hex} onChange={(e) => updateEntry(en.key, { hex: e.target.value })} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
               </div>
-            ))}
-          </div>
-        </div>
+            )}
 
-        <button type="submit" disabled={saving} style={{ ...btnPrimary, justifyContent: "center", marginTop: 6 }}>
-          {saving ? "Salvando..." : <><Scissors size={14} /> Lançar corte ({totalQty} peça{totalQty === 1 ? "" : "s"})</>}
+            <div style={{ marginBottom: 10 }}>
+              <label style={labelStyle}>Fotos desta cor (até 4 · a 1ª é a principal)</label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {en.images.map((img, i) => (
+                  <div key={i} style={{ position: "relative", width: 60, height: 76 }}>
+                    <img src={img} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 3, border: i === 0 ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}` }} />
+                    <button type="button" onClick={() => updateEntry(en.key, { images: en.images.filter((_, x) => x !== i) })} style={{ position: "absolute", top: -6, right: -6, background: TOKENS.wine, color: "#fff", border: "none", borderRadius: "50%", width: 16, height: 16, cursor: "pointer", fontSize: 10 }}>×</button>
+                  </div>
+                ))}
+                {en.images.length < 4 && (
+                  <label style={{ width: 60, height: 76, border: `1px dashed ${TOKENS.line}`, borderRadius: 3, background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", color: TOKENS.graphite, gap: 3 }}>
+                    <Upload size={13} /><span style={{ fontSize: 9 }}>Subir</span>
+                    <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => e.target.files.length && addImagesToEntry(en.key, e.target.files, en.images)} />
+                  </label>
+                )}
+              </div>
+            </div>
+
+            <label style={labelStyle}>Quantidade cortada por tamanho</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {SIZES.map((s) => (
+                <div key={s} style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10.5, textAlign: "center", color: TOKENS.graphite, marginBottom: 3 }}>{s}</div>
+                  <input type="number" min={0} value={en.sizeQty[s]} onChange={(e) => updateEntry(en.key, { sizeQty: { ...en.sizeQty, [s]: Math.max(0, Number(e.target.value) || 0) } })} style={{ ...inputStyle, textAlign: "center", background: "#fff" }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        <button type="button" onClick={addEntry} style={{ ...btnGhostSmall, justifyContent: "center" }}><Plus size={14} /> Adicionar outra cor</button>
+
+        <button type="submit" disabled={saving} style={{ ...btnPrimary, justifyContent: "center" }}>
+          {saving ? "Salvando..." : <><Scissors size={14} /> Lançar corte ({totalGeral} peça{totalGeral === 1 ? "" : "s"} · {colorEntries.length} cor{colorEntries.length === 1 ? "" : "es"})</>}
         </button>
       </form>
     </div>
   );
 }
 
-function CorteLancadoConfirmacao({ lastBatch, onNovoLancamento, onBack }) {
-  const { product, variant, batches } = lastBatch;
-  function codeFor(size) {
+function CorteLancadoConfirmacao({ lastBatches, onNovoLancamento, onBack }) {
+  const product = lastBatches[0]?.product;
+  function codeFor(variant, size) {
     const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
     const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
     return `${baseCode}-${colorCode}-${size}`;
   }
-  const entries = batches.flatMap((b) => Array.from({ length: b.qty }, () => ({ model: product.model, color: variant.color, size: b.size, code: codeFor(b.size) })));
-  const totalQty = batches.reduce((a, b) => a + b.qty, 0);
+  const entries = lastBatches.flatMap(({ variant, batches }) =>
+    batches.flatMap((b) => Array.from({ length: b.qty }, () => ({ model: product.model, color: variant.color, size: b.size, code: codeFor(variant, b.size) })))
+  );
+  const totalQty = entries.length;
+  const totalCores = lastBatches.length;
 
   async function baixarPdf() {
     const blob = await buildItemLabelsPdfBlob(entries);
@@ -3078,9 +3136,9 @@ function CorteLancadoConfirmacao({ lastBatch, onNovoLancamento, onBack }) {
   return (
     <div style={{ maxWidth: 480 }}>
       <div style={{ background: "#EAF3DE", color: "#27500A", padding: "12px 14px", borderRadius: 4, fontSize: 13, marginBottom: 16 }}>
-        Corte lançado! {product.model} · {variant.color} — {totalQty} peça(s), aguardando aprovação.
+        Corte lançado! {product.model} — {totalCores} cor{totalCores === 1 ? "" : "es"}, {totalQty} peça(s) no total, aguardando aprovação.
       </div>
-      <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 10 }}>Já pode imprimir as etiquetas para a produção colar nas peças enquanto costura:</div>
+      <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 10 }}>Já pode imprimir as etiquetas (de todas as cores) para a produção colar nas peças enquanto costura:</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
         <button onClick={baixarPdf} style={btnGhostSmall}><Printer size={13} /> Etiquetas (PDF)</button>
         <button onClick={baixarEpl} style={btnGhostSmall}>.epl (Zebra)</button>
@@ -3092,6 +3150,7 @@ function CorteLancadoConfirmacao({ lastBatch, onNovoLancamento, onBack }) {
     </div>
   );
 }
+
 
 function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApprove, onBack }) {
   const sorted = cutBatches.slice().sort((a, b) => new Date(b.cutAt) - new Date(a.cutAt));
