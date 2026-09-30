@@ -3483,12 +3483,28 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
     setLabelQty({ P: variant.stock?.P || 0, M: variant.stock?.M || 0, G: variant.stock?.G || 0, GG: variant.stock?.GG || 0 });
   }
 
+  // Usa as peças de verdade já rastreadas (mesmo código sequencial da
+  // Listagem de itens) em vez de gerar um código em lote por cor/tamanho —
+  // assim a etiqueta impressa aqui é idêntica à da Listagem de itens e à do
+  // fluxo de corte, sem risco de colisão entre nomes de cor parecidos.
+  function itemsForLabel(product, variant, qtyBySize) {
+    const tracked = (stockItems || []).filter((si) => si.productId === product.id && si.variantId === variant.id && !si.orderId);
+    const entries = [];
+    SIZES.forEach((s) => {
+      const n = Math.max(0, Math.floor(Number(qtyBySize?.[s]) || 0));
+      const pool = tracked.filter((si) => si.size === s).sort((a, b) => a.seq - b.seq).slice(0, n);
+      pool.forEach((si) => entries.push({ model: si.model, color: si.color, size: si.size, code: `${(si.sku || "").toUpperCase()}.${si.seq}` }));
+    });
+    return entries;
+  }
+
   async function confirmGenerateLabels() {
     setGeneratingLabels(true);
     try {
       const { product, variant } = labelModal;
-      const blob = await buildStockLabelsPdfBlob(product.model, product.sku, variant, labelQty);
-      if (!blob) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
+      const entries = itemsForLabel(product, variant, labelQty);
+      if (!entries.length) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
+      const blob = await buildItemLabelsPdfBlob(entries);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `etiquetas-${(product.model || "produto").replace(/\s+/g, "-").toLowerCase()}-${(variant.color || "cor").replace(/\s+/g, "-").toLowerCase()}.pdf`;
@@ -3504,13 +3520,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
   // verdade é o próprio ZebraDesigner, que já sabe falar com a impressora.
   function confirmGenerateCsv() {
     const { product, variant } = labelModal;
-    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
-    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
-    const entries = [];
-    SIZES.forEach((s) => {
-      const n = Math.max(0, Math.floor(Number(labelQty[s]) || 0));
-      for (let i = 0; i < n; i++) entries.push({ model: product.model, color: variant.color, size: s, code: `${baseCode}-${colorCode}-${s}` });
-    });
+    const entries = itemsForLabel(product, variant, labelQty);
     if (!entries.length) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
     downloadCsvFile(buildLabelsCsv(entries), `etiquetas-${(product.model || "produto").replace(/\s+/g, "-").toLowerCase()}-${(variant.color || "cor").replace(/\s+/g, "-").toLowerCase()}.csv`);
     setLabelModal(null);
@@ -3519,13 +3529,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
   // etiquetas, para quem imprime direto na impressora em vez de via PDF.
   function confirmGenerateEpl() {
     const { product, variant } = labelModal;
-    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
-    const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
-    const entries = [];
-    SIZES.forEach((s) => {
-      const n = Math.max(0, Math.floor(Number(labelQty[s]) || 0));
-      for (let i = 0; i < n; i++) entries.push({ model: product.model, color: variant.color, size: s, code: `${baseCode}-${colorCode}-${s}` });
-    });
+    const entries = itemsForLabel(product, variant, labelQty);
     if (!entries.length) { alert("Coloque uma quantidade maior que 0 em pelo menos um tamanho para gerar as etiquetas."); return; }
     downloadEplFile(buildEplLabels(entries), `etiquetas-${(product.model || "produto").replace(/\s+/g, "-").toLowerCase()}-${(variant.color || "cor").replace(/\s+/g, "-").toLowerCase()}.epl`);
     setLabelModal(null);
