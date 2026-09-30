@@ -3023,7 +3023,7 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   async function printOrder() {
     setPrinting(true);
     try {
-      const blob = await buildOrderPdfBlob(order.items, { name: order.sellerName, username: order.sellerUsername }, true, { buyerName: order.clientName }, order.note);
+      const blob = await buildOrderPdfBlob(order.items, { name: order.sellerName, username: order.sellerUsername }, false, { buyerName: order.clientName }, order.note);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `pedido-${order.clientName.replace(/\s+/g, "-").toLowerCase()}-${order.id}.pdf`;
