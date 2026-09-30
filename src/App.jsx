@@ -916,16 +916,27 @@ function rowToStockItem(r) {
     return { product: newProduct, variant: newVariant };
   }
 
-  function lancarCorte({ product, variant, sizeQtyMap }) {
+  // Aceita uma ou várias cores de uma vez (colorResults: [{product, variant,
+  // sizeQtyMap}, ...]) e grava tudo numa única chamada — chamar
+  // persistCutBatches várias vezes em sequência rápida (uma por cor) fazia a
+  // última sobrescrever a primeira, já que cada chamada partia do mesmo
+  // cutBatches (ainda não atualizado pela chamada anterior).
+  function lancarCorte(colorResults) {
+    const entries = Array.isArray(colorResults) ? colorResults : [colorResults];
     const now = new Date().toISOString();
-    const batches = Object.entries(sizeQtyMap)
-      .filter(([, qty]) => qty > 0)
-      .map(([size, qty]) => ({
-        id: uid("cb_"), productId: product.id, variantId: variant.id, model: product.model, color: variant.color,
-        size, qty, cutBy: session.name || session.username, cutAt: now, status: "pendente",
-      }));
-    if (batches.length) persistCutBatches([...cutBatches, ...batches]);
-    return batches;
+    const allBatches = [];
+    const resultados = entries.map(({ product, variant, sizeQtyMap }) => {
+      const batches = Object.entries(sizeQtyMap)
+        .filter(([, qty]) => qty > 0)
+        .map(([size, qty]) => ({
+          id: uid("cb_"), productId: product.id, variantId: variant.id, model: product.model, color: variant.color,
+          size, qty, cutBy: session.name || session.username, cutAt: now, status: "pendente",
+        }));
+      allBatches.push(...batches);
+      return { product, variant, batches };
+    });
+    if (allBatches.length) persistCutBatches([...cutBatches, ...allBatches]);
+    return resultados;
   }
 
   // Admin aprova um corte pendente: marca aprovado e soma a quantidade na
@@ -3120,10 +3131,7 @@ function LancarCorteView({ products, categories, lancarCorte, persistProducts, o
         await persistProdutosDireto(targetProduct, products, productId);
       }
 
-      const resultados = entriesValidas.map((en) => ({
-        product: targetProduct, variant: variantByKey[en.key],
-        batches: lancarCorte({ product: targetProduct, variant: variantByKey[en.key], sizeQtyMap: en.sizeQty }),
-      }));
+      const resultados = lancarCorte(entriesValidas.map((en) => ({ product: targetProduct, variant: variantByKey[en.key], sizeQtyMap: en.sizeQty })));
       setLastBatches(resultados);
       setColorEntries([novaEntradaCor()]);
       setModel(""); setSku(""); setDescription(""); setPrice(""); setCostPrice("");
