@@ -17,6 +17,17 @@ const TOKENS = {
 const SIZES = ["P", "M", "G", "GG"];
 const DEFAULT_CATEGORIES = ["Conjunto de Short", "Conjunto de Calça", "Macaquinhos", "KIT's"];
 
+// Se o produto não tem SKU cadastrado, usa as iniciais do nome do modelo em
+// vez do nome inteiro — evita código de barras enorme (ex.: "Conjunto Short
+// Fly" sem SKU vira "CSF", não "CONJUNTO SHORT FLY").
+function shortSkuFor(sku, model) {
+  const clean = (sku || "").trim();
+  if (clean) return clean;
+  const words = (model || "ITEM").trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1) return words.map((w) => w[0]).join("").toUpperCase().slice(0, 6) || "ITEM";
+  return (words[0] || "ITEM").toUpperCase().slice(0, 6);
+}
+
 // Áreas do Painel ADM que podem ser ligadas/desligadas por login de
 // funcionário — usado no montador de login (Login de Funcionários) e pra
 // filtrar as abas que cada um vê.
@@ -406,7 +417,7 @@ async function buildLabelsGridPdf(entries) {
     const y = LABEL_MARGIN_Y + row * LABEL_H;
 
     const canvas = document.createElement("canvas");
-    JsBarcode(canvas, e.code, { format: "CODE128", width: 1, height: 30, displayValue: false, margin: 0 });
+    JsBarcode(canvas, e.code, { format: "CODE128", width: 1, height: 35, displayValue: false, margin: 0 });
     drawLabel(doc, x, y, e.model, e.color, e.size, e.code, canvas.toDataURL("image/png"));
   });
   return doc.output("blob");
@@ -417,7 +428,7 @@ async function buildLabelsGridPdf(entries) {
 // G:0, GG:6} gera 10 etiquetas de P e 6 de GG). O código combina SKU (ou
 // nome do modelo) + cor + tamanho, para ficar único por peça.
 async function buildStockLabelsPdfBlob(productModel, productSku, variant, qtyBySize) {
-  const baseCode = (productSku || productModel || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
+  const baseCode = shortSkuFor(productSku, productModel).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 14) || "ITEM";
   const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
   const entries = [];
   SIZES.forEach((s) => {
@@ -936,7 +947,7 @@ function rowToStockItem(r) {
     for (let i = 0; i < batch.qty; i++) {
       newItems.push({
         id: uid("si_"), productId: batch.productId, variantId: batch.variantId, model: batch.model,
-        sku: product?.sku || batch.model, color: batch.color, hex: variant?.hex, size: batch.size,
+        sku: shortSkuFor(product?.sku, batch.model), color: batch.color, hex: variant?.hex, size: batch.size,
         seq: seq++, orderId: null, confirmed: false, cutBatchId: batch.id,
       });
     }
@@ -1047,7 +1058,7 @@ function rowToStockItem(r) {
     persistProducts(nextProducts);
     persistStockItems([...stockItems, {
       id: uid("si_"), productId: product.id, variantId: variant.id, model: product.model,
-      sku: product.sku || product.model, color: variant.color, hex: variant.hex, size: match.size,
+      sku: shortSkuFor(product.sku, product.model), color: variant.color, hex: variant.hex, size: match.size,
       seq, orderId: null, confirmed: true, confirmedAt: new Date().toISOString(),
     }]);
     return { ok: true, message: `${product.model} · ${variant.color} · ${match.size}${veioDaProducao ? " (confirmado da produção)" : ""} — pronta entrega agora: ${newStock}` };
@@ -3258,7 +3269,7 @@ function LancarCorteView({ products, categories, lancarCorte, persistProducts, o
 function CorteLancadoConfirmacao({ lastBatches, onNovoLancamento, onBack }) {
   const product = lastBatches[0]?.product;
   function codeFor(variant, size) {
-    const baseCode = (product.sku || product.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
+    const baseCode = shortSkuFor(product.sku, product.model).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
     const colorCode = (variant.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
     return `${baseCode}-${colorCode}-${size}`;
   }
@@ -3453,7 +3464,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
         if (delta > 0) {
           for (let i = 0; i < delta; i++) {
             newStockItems.push({
-              id: uid("si_"), productId: p.id, variantId: v.id, model: p.model, sku: p.sku || p.model || "ITEM",
+              id: uid("si_"), productId: p.id, variantId: v.id, model: p.model, sku: shortSkuFor(p.sku, p.model),
               color: v.color, hex: v.hex, size: s, seq: seqCursor, orderId: null, createdAt: new Date().toISOString(),
             });
             seqCursor++;
