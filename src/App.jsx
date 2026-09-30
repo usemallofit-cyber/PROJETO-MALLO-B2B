@@ -1012,6 +1012,24 @@ function rowToStockItem(r) {
   // e soma 1 em "Pronta entrega" (transferência). Se não tinha nada em
   // produção esperando, soma direto em "Pronta entrega" (fluxo antigo,
   // continua funcionando pra reposição normal sem passar pelo corte).
+  // Acha, entre os pedidos ativos, o mais antigo que tem um item "em
+  // produção" (vendido antes da peça existir fisicamente) desse mesmo
+  // produto/cor/tamanho e que ainda não recebeu peça física suficiente pra
+  // cobrir a quantidade comprada — usado pra saber se uma peça recém-pronta
+  // precisa ir pro pedido de quem já comprou, em vez de virar estoque livre.
+  function findPendingProducaoOrder(productId, variantId, size) {
+    const ativos = orders
+      .filter((o) => o.status !== "Pedido completo" && o.status !== "Pedido cancelado")
+      .filter((o) => (o.items || []).some((it) => it.stockType === "producao" && it.productId === productId && it.variantId === variantId && it.size === size))
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    for (const o of ativos) {
+      const item = o.items.find((it) => it.stockType === "producao" && it.productId === productId && it.variantId === variantId && it.size === size);
+      const jaLigadas = stockItems.filter((si) => si.orderId === o.id && si.productId === productId && si.variantId === variantId && si.size === size).length;
+      if (jaLigadas < item.qty) return o;
+    }
+    return null;
+  }
+
   function scanReceiveStock(code) {
     const raw = (code || "").trim().toUpperCase();
     if (!raw) return { ok: false, message: "Código não reconhecido." };
@@ -1030,8 +1048,27 @@ function rowToStockItem(r) {
         const product = products.find((p) => p.id === existing.productId);
         const variant = product?.variants.find((v) => v.id === existing.variantId);
         if (!product || !variant) return { ok: false, message: "Produto não encontrado." };
-        const newStock = (variant.stock?.[existing.size] || 0) + 1;
         const producaoAtual = variant.stockProducao?.[existing.size] || 0;
+        const pedidoReservando = findPendingProducaoOrder(existing.productId, existing.variantId, existing.size);
+
+        if (pedidoReservando) {
+          // Essa peça já tem dono — foi vendida como "em produção" antes de
+          // existir de verdade. Sai de produção, mas NÃO entra em pronta
+          // entrega (não fica disponível pra outra venda): já nasce ligada
+          // ao pedido de quem comprou.
+          const nextProducts = products.map((p) => p.id !== product.id ? p : {
+            ...p,
+            variants: p.variants.map((v) => v.id !== variant.id ? v : {
+              ...v,
+              stockProducao: { ...v.stockProducao, [existing.size]: Math.max(0, producaoAtual - 1) },
+            }),
+          });
+          persistProducts(nextProducts);
+          persistStockItems(stockItems.map((si) => si.id === existing.id ? { ...si, confirmed: true, confirmedAt: new Date().toISOString(), orderId: pedidoReservando.id } : si));
+          return { ok: true, reservedForOrder: true, message: `${product.model} · ${variant.color} · ${existing.size} — peça já vendida! Vai para o pedido de ${pedidoReservando.clientName} (não entrou em pronta entrega).` };
+        }
+
+        const newStock = (variant.stock?.[existing.size] || 0) + 1;
         const nextProducts = products.map((p) => p.id !== product.id ? p : {
           ...p,
           variants: p.variants.map((v) => v.id !== variant.id ? v : {
@@ -2861,6 +2898,10 @@ function ReceberEstoqueView({ scanReceiveStock, onBack }) {
           l.alreadyReceived ? (
             <div key={i} style={{ padding: "12px 14px", borderRadius: 4, background: "#FCEBEB", color: "#791F1F", fontSize: 16, fontWeight: 700, border: "1px solid #F09595" }}>
               ATENÇÃO. {l.message}
+            </div>
+          ) : l.reservedForOrder ? (
+            <div key={i} style={{ padding: "12px 14px", borderRadius: 4, background: "#FAEEDA", color: "#633806", fontSize: 16, fontWeight: 700, border: "1px solid #EF9F27" }}>
+              JÁ VENDIDA. {l.message}
             </div>
           ) : (
             <div key={i} style={{ padding: "8px 12px", borderRadius: 4, background: l.ok ? "#EAF3DE" : "#FCEBEB", color: l.ok ? "#27500A" : "#791F1F", fontSize: 12.5 }}>
