@@ -3414,15 +3414,13 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
       {pendentes.map((b) => <Row key={b.id} b={b} />)}
       {outros.length > 0 && (
         <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "18px 0 8px", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "18px 0 8px", flexWrap: "wrap", gap: 8, minHeight: 30 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5 }}>Histórico</div>
-            {selecionados.length > 0 && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 11.5, color: TOKENS.graphite }}>{selecionados.length} selecionado(s)</span>
-                <button onClick={printSelectedPdf} style={btnGhostSmall}><Printer size={13} /> Etiquetas selecionadas (PDF)</button>
-                <button onClick={printSelectedEpl} style={btnGhostSmall}>.epl (Zebra)</button>
-              </div>
-            )}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", visibility: selecionados.length > 0 ? "visible" : "hidden" }}>
+              <span style={{ fontSize: 11.5, color: TOKENS.graphite }}>{selecionados.length} selecionado(s)</span>
+              <button onClick={printSelectedPdf} style={btnGhostSmall}><Printer size={13} /> Etiquetas selecionadas (PDF)</button>
+              <button onClick={printSelectedEpl} style={btnGhostSmall}>.epl (Zebra)</button>
+            </div>
           </div>
           {outros.map((b) => <Row key={b.id} b={b} />)}
         </>
