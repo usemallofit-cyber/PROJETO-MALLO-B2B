@@ -853,11 +853,13 @@ export default function App() {
   }, [orders]);
 function stockItemToRow(si) {
   return { id: si.id, product_id: si.productId, variant_id: si.variantId, model: si.model, sku: si.sku,
-    color: si.color, hex: si.hex, size: si.size, seq: si.seq, order_id: si.orderId || null };
+    color: si.color, hex: si.hex, size: si.size, seq: si.seq, order_id: si.orderId || null,
+    confirmed: si.confirmed !== false, confirmed_at: si.confirmedAt || null, cut_batch_id: si.cutBatchId || null };
 }
 function rowToStockItem(r) {
   return { id: r.id, productId: r.product_id, variantId: r.variant_id, model: r.model, sku: r.sku,
-    color: r.color, hex: r.hex, size: r.size, seq: r.seq, orderId: r.order_id };
+    color: r.color, hex: r.hex, size: r.size, seq: r.seq, orderId: r.order_id,
+    confirmed: r.confirmed !== false, confirmedAt: r.confirmed_at, cutBatchId: r.cut_batch_id };
 }
 
   const persistStockItems = useCallback(async (next) => {
@@ -922,8 +924,25 @@ function rowToStockItem(r) {
     const batch = cutBatches.find((b) => b.id === batchId);
     if (!batch || batch.status !== "pendente") return;
     const expected = new Date(batch.cutAt); expected.setDate(expected.getDate() + 30);
+    const product = products.find((p) => p.id === batch.productId);
+    const variant = product?.variants.find((v) => v.id === batch.variantId);
+    let seq = product?.nextItemSeq || 1;
+    // Cada peça já nasce com um código único e sequencial (o mesmo padrão da
+    // Listagem de itens), em vez de um código genérico por cor/tamanho —
+    // isso evita colisão entre cores com nomes parecidos (ex.: "Verde" e
+    // "Vermelho" davam o mesmo código de 3 letras) e permite detectar se a
+    // mesma peça for bipada duas vezes em "Receber estoque".
+    const newItems = [];
+    for (let i = 0; i < batch.qty; i++) {
+      newItems.push({
+        id: uid("si_"), productId: batch.productId, variantId: batch.variantId, model: batch.model,
+        sku: product?.sku || batch.model, color: batch.color, hex: variant?.hex, size: batch.size,
+        seq: seq++, orderId: null, confirmed: false, cutBatchId: batch.id,
+      });
+    }
     const nextProducts = products.map((p) => p.id !== batch.productId ? p : {
       ...p,
+      nextItemSeq: seq,
       variants: p.variants.map((v) => v.id !== batch.variantId ? v : {
         ...v,
         stockProducao: { ...(v.stockProducao || {}), [batch.size]: (v.stockProducao?.[batch.size] || 0) + batch.qty },
@@ -931,6 +950,7 @@ function rowToStockItem(r) {
       }),
     });
     await persistProducts(nextProducts);
+    await persistStockItems([...stockItems, ...newItems]);
     await persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "aprovado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
   }
 
@@ -971,6 +991,41 @@ function rowToStockItem(r) {
   // produção esperando, soma direto em "Pronta entrega" (fluxo antigo,
   // continua funcionando pra reposição normal sem passar pelo corte).
   function scanReceiveStock(code) {
+    const raw = (code || "").trim().toUpperCase();
+    if (!raw) return { ok: false, message: "Código não reconhecido." };
+
+    // Primeiro, tenta achar uma peça já rastreada individualmente (nascida
+    // na aprovação de um corte, ou de uma bipada anterior) por esse código
+    // exato — isso é o que permite detectar se a mesma peça física está
+    // sendo bipada de novo por engano.
+    const dotMatch = raw.match(/^(.+)\.(\d+)$/);
+    if (dotMatch) {
+      const existing = stockItems.find((si) => `${(si.sku || "").toUpperCase()}.${si.seq}` === raw);
+      if (existing) {
+        if (existing.confirmed) {
+          return { ok: false, alreadyReceived: true, message: `${raw} já foi recebida em ${existing.confirmedAt ? new Date(existing.confirmedAt).toLocaleString("pt-BR") : "uma bipada anterior"}. Não foi contada de novo.` };
+        }
+        const product = products.find((p) => p.id === existing.productId);
+        const variant = product?.variants.find((v) => v.id === existing.variantId);
+        if (!product || !variant) return { ok: false, message: "Produto não encontrado." };
+        const newStock = (variant.stock?.[existing.size] || 0) + 1;
+        const producaoAtual = variant.stockProducao?.[existing.size] || 0;
+        const nextProducts = products.map((p) => p.id !== product.id ? p : {
+          ...p,
+          variants: p.variants.map((v) => v.id !== variant.id ? v : {
+            ...v,
+            stock: { ...v.stock, [existing.size]: newStock },
+            stockProducao: { ...v.stockProducao, [existing.size]: Math.max(0, producaoAtual - 1) },
+          }),
+        });
+        persistProducts(nextProducts);
+        persistStockItems(stockItems.map((si) => si.id === existing.id ? { ...si, confirmed: true, confirmedAt: new Date().toISOString() } : si));
+        return { ok: true, message: `${product.model} · ${variant.color} · ${existing.size} (confirmado da produção) — pronta entrega agora: ${newStock}` };
+      }
+    }
+
+    // Se não é uma peça já rastreada, cai no formato antigo em lote
+    // (SKU-COR-TAM) — reposição direta, sem ter passado por corte/aprovação.
     const match = matchScannedCode(code, products, stockItems);
     if (!match) return { ok: false, message: "Código não reconhecido." };
     const product = products.find((p) => p.id === match.productId);
@@ -993,7 +1048,7 @@ function rowToStockItem(r) {
     persistStockItems([...stockItems, {
       id: uid("si_"), productId: product.id, variantId: variant.id, model: product.model,
       sku: product.sku || product.model, color: variant.color, hex: variant.hex, size: match.size,
-      seq, orderId: null,
+      seq, orderId: null, confirmed: true, confirmedAt: new Date().toISOString(),
     }]);
     return { ok: true, message: `${product.model} · ${variant.color} · ${match.size}${veioDaProducao ? " (confirmado da produção)" : ""} — pronta entrega agora: ${newStock}` };
   }
@@ -1930,7 +1985,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
@@ -2712,7 +2767,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -2723,7 +2778,7 @@ function ColetaEstoqueAdmin({ orders, products, settings, cutBatches, lancarCort
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
   if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} persistProducts={persistProducts} onBack={() => setMode("menu")} />;
-  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
+  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} stockItems={stockItems} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
     <div>
@@ -2781,9 +2836,15 @@ function ReceberEstoqueView({ scanReceiveStock, onBack }) {
       </form>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" }}>
         {log.map((l, i) => (
-          <div key={i} style={{ padding: "8px 12px", borderRadius: 4, background: l.ok ? "#EAF3DE" : "#FCEBEB", color: l.ok ? "#27500A" : "#791F1F", fontSize: 12.5 }}>
-            <b style={{ fontFamily: "monospace" }}>{l.code}</b> — {l.message}
-          </div>
+          l.alreadyReceived ? (
+            <div key={i} style={{ padding: "12px 14px", borderRadius: 4, background: "#FCEBEB", color: "#791F1F", fontSize: 16, fontWeight: 700, border: "1px solid #F09595" }}>
+              ATENÇÃO. {l.message}
+            </div>
+          ) : (
+            <div key={i} style={{ padding: "8px 12px", borderRadius: 4, background: l.ok ? "#EAF3DE" : "#FCEBEB", color: l.ok ? "#27500A" : "#791F1F", fontSize: 12.5 }}>
+              <b style={{ fontFamily: "monospace" }}>{l.code}</b> — {l.message}
+            </div>
+          )
         ))}
       </div>
     </div>
@@ -3238,7 +3299,7 @@ function CorteLancadoConfirmacao({ lastBatches, onNovoLancamento, onBack }) {
 }
 
 
-function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApprove, onBack }) {
+function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarCorte, canApprove, onBack }) {
   const sorted = cutBatches.slice().sort((a, b) => new Date(b.cutAt) - new Date(a.cutAt));
   const pendentes = sorted.filter((b) => b.status === "pendente");
   const outros = sorted.filter((b) => b.status !== "pendente");
@@ -3257,15 +3318,19 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
     try { await rejeitarCorte(id); } finally { setProcessingId(""); }
   }
 
-  function codeFor(b) {
-    const product = products.find((p) => p.id === b.productId);
-    const baseCode = (product?.sku || b.model || "ITEM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "ITEM";
-    const colorCode = (b.color || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
-    return `${baseCode}-${colorCode}-${b.size}`;
+  // Busca as peças de verdade criadas na aprovação desse corte (cada uma com
+  // seu código único e sequencial), em vez de gerar um código genérico por
+  // cor/tamanho — assim a etiqueta impressa é a mesma referência usada na
+  // Listagem de itens e reconhecida em "Receber estoque".
+  function itemsFor(b) {
+    return stockItems.filter((si) => si.cutBatchId === b.id);
+  }
+  function entryFor(si) {
+    return { model: si.model, color: si.color, size: si.size, code: `${(si.sku || "").toUpperCase()}.${si.seq}` };
   }
   async function printBatchPdf(b) {
-    const code = codeFor(b);
-    const entries = Array.from({ length: b.qty }, () => ({ model: b.model, color: b.color, size: b.size, code }));
+    const entries = itemsFor(b).map(entryFor);
+    if (!entries.length) { alert("Não achei as peças numeradas desse corte."); return; }
     const blob = await buildItemLabelsPdfBlob(entries);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -3274,8 +3339,8 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
     URL.revokeObjectURL(url);
   }
   function printBatchEpl(b) {
-    const code = codeFor(b);
-    const entries = Array.from({ length: b.qty }, () => ({ model: b.model, color: b.color, size: b.size, code }));
+    const entries = itemsFor(b).map(entryFor);
+    if (!entries.length) { alert("Não achei as peças numeradas desse corte."); return; }
     downloadEplFile(buildEplLabels(entries), `producao-${b.model.replace(/\s+/g, "-").toLowerCase()}-${b.color.replace(/\s+/g, "-").toLowerCase()}-${b.size}.epl`);
   }
 
@@ -3284,10 +3349,7 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
   const selecionados = outros.filter((b) => b.status === "aprovado" && selected[b.id]);
 
   function entriesFor(batches) {
-    return batches.flatMap((b) => {
-      const code = codeFor(b);
-      return Array.from({ length: b.qty }, () => ({ model: b.model, color: b.color, size: b.size, code }));
-    });
+    return batches.flatMap((b) => itemsFor(b).map(entryFor));
   }
   async function printSelectedPdf() {
     const blob = await buildItemLabelsPdfBlob(entriesFor(selecionados));
@@ -3729,6 +3791,7 @@ function ItemListAdmin({ stockItems, setStockItems, orders, products, setProduct
                 <span style={{ fontSize: 10.5, color: TOKENS.graphite }}>Vendido · pedido de {order?.clientName || "?"}{order ? ` (${order.status})` : ""}</span>
               ) : (
                 <>
+                  {si.confirmed === false && <span style={{ fontSize: 10, fontWeight: 600, color: "#633806", background: "#FAEEDA", padding: "2px 8px", borderRadius: 3, whiteSpace: "nowrap" }}>Em produção</span>}
                   <button onClick={() => printOne(si)} disabled={printingId === si.id} title="Baixar PDF" style={iconBtnStyle}><Printer size={15} /></button>
                   <button onClick={() => printOneEpl(si)} title="Baixar .epl (Zebra)" style={{ ...iconBtnStyle, fontSize: 10, fontWeight: 700 }}>EPL</button>
                   <button onClick={() => deleteOne(si)} style={{ ...iconBtnStyle, color: "#A5453F" }}><Trash2 size={15} /></button>
