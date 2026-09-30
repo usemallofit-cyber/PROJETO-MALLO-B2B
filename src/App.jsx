@@ -3527,7 +3527,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
           return (
           <div key={p.id} style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
             <div style={{ aspectRatio: "3/4", background: TOKENS.ivorySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {p.variants?.[0]?.images?.[0] ? <img src={p.variants[0].images[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={28} color={TOKENS.line} />}
+              {activeVariant?.images?.[0] ? <img src={activeVariant.images[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={28} color={TOKENS.line} />}
             </div>
             <div style={{ padding: 12 }}>
               <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: TOKENS.wine, marginBottom: 3 }}>{p.category}</div>
