@@ -1307,7 +1307,7 @@ function rowToStockItem(r) {
 
     const items = cart.map((c) => {
       const prod = products.find((p) => p.id === c.productId);
-      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, productId: c.productId, variantId: c.variantId, stockType: c.stockType || "pronta" };
+      return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, sku: prod?.sku || "", productId: c.productId, variantId: c.variantId, stockType: c.stockType || "pronta" };
     });
     const { data, error } = await withRetry(() => supabase.functions.invoke("finalize-order", {
       body: { clientName: selectedClient?.buyerName || session.name || session.username, items, note: note || "" },
@@ -3065,9 +3065,12 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: `1px solid ${complete ? "#97C459" : "#F09595"}`, borderRadius: 8, padding: "10px 14px" }}>
               <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 3, background: complete ? "#EAF3DE" : "#FCEBEB", color: complete ? "#27500A" : "#791F1F", whiteSpace: "nowrap" }}>{complete ? "Completo" : "Faltando"}</span>
+              <div style={{ width: 40, height: 50, borderRadius: 4, background: TOKENS.ivorySoft, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                {it.image ? <img src={it.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={16} color={TOKENS.line} />}
+              </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{it.model} · {it.color} · {it.size}</div>
-                <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{collected} de {it.qty} coletadas</div>
+                <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{collected} de {it.qty} coletadas{it.sku ? ` · SKU ${it.sku}` : ""}</div>
               </div>
             </div>
           );
