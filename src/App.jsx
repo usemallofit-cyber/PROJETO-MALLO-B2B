@@ -3279,20 +3279,45 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
     downloadEplFile(buildEplLabels(entries), `producao-${b.model.replace(/\s+/g, "-").toLowerCase()}-${b.color.replace(/\s+/g, "-").toLowerCase()}-${b.size}.epl`);
   }
 
+  const [selected, setSelected] = useState({});
+  function toggleSelect(id) { setSelected((s) => ({ ...s, [id]: !s[id] })); }
+  const selecionados = outros.filter((b) => b.status === "aprovado" && selected[b.id]);
+
+  function entriesFor(batches) {
+    return batches.flatMap((b) => {
+      const code = codeFor(b);
+      return Array.from({ length: b.qty }, () => ({ model: b.model, color: b.color, size: b.size, code }));
+    });
+  }
+  async function printSelectedPdf() {
+    const blob = await buildItemLabelsPdfBlob(entriesFor(selecionados));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `etiquetas-selecionadas-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  function printSelectedEpl() {
+    downloadEplFile(buildEplLabels(entriesFor(selecionados)), `etiquetas-selecionadas-${new Date().toISOString().slice(0, 10)}.epl`);
+  }
+
   function Row({ b }) {
     const statusColor = b.status === "aprovado" ? { bg: "#EAF3DE", fg: "#27500A" } : b.status === "rejeitado" ? { bg: "#FCEBEB", fg: "#791F1F" } : { bg: "#FAEEDA", fg: "#633806" };
     return (
       <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{b.model} · {b.color} · {b.size} — {b.qty} peça(s)</div>
-            <div style={{ fontSize: 11.5, color: TOKENS.graphite, marginTop: 2 }}>Lançado por {b.cutBy} · {new Date(b.cutAt).toLocaleString("pt-BR")}</div>
-            {b.status !== "pendente" && b.approvedBy && <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{b.status === "aprovado" ? "Aprovado" : "Recusado"} por {b.approvedBy} · {new Date(b.approvedAt).toLocaleString("pt-BR")}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            {b.status === "aprovado" && <input type="checkbox" checked={!!selected[b.id]} onChange={() => toggleSelect(b.id)} style={{ marginTop: 3 }} />}
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{b.model} · {b.color} · {b.size} — {b.qty} peça(s)</div>
+              <div style={{ fontSize: 11.5, color: TOKENS.graphite, marginTop: 2 }}>Lançado por {b.cutBy} · {new Date(b.cutAt).toLocaleString("pt-BR")}</div>
+              {b.status !== "pendente" && b.approvedBy && <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{b.status === "aprovado" ? "Aprovado" : "Recusado"} por {b.approvedBy} · {new Date(b.approvedAt).toLocaleString("pt-BR")}</div>}
+            </div>
           </div>
           <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 3, background: statusColor.bg, color: statusColor.fg, whiteSpace: "nowrap" }}>{b.status}</span>
         </div>
         {b.status === "aprovado" && (
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 10, marginLeft: 26 }}>
             <button onClick={() => printBatchPdf(b)} style={btnGhostSmall}><Printer size={13} /> Etiquetas (PDF)</button>
             <button onClick={() => printBatchEpl(b)} style={btnGhostSmall}>.epl (Zebra)</button>
           </div>
@@ -3316,7 +3341,16 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
       {pendentes.map((b) => <Row key={b.id} b={b} />)}
       {outros.length > 0 && (
         <>
-          <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, margin: "18px 0 8px" }}>Histórico</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "18px 0 8px", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5 }}>Histórico</div>
+            {selecionados.length > 0 && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 11.5, color: TOKENS.graphite }}>{selecionados.length} selecionado(s)</span>
+                <button onClick={printSelectedPdf} style={btnGhostSmall}><Printer size={13} /> Etiquetas selecionadas (PDF)</button>
+                <button onClick={printSelectedEpl} style={btnGhostSmall}>.epl (Zebra)</button>
+              </div>
+            )}
+          </div>
           {outros.map((b) => <Row key={b.id} b={b} />)}
         </>
       )}
