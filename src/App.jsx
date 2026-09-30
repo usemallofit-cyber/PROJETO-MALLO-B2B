@@ -918,7 +918,7 @@ function rowToStockItem(r) {
   // Admin aprova um corte pendente: marca aprovado e soma a quantidade na
   // Programação do produto (estoque separado da pronta entrega), com
   // previsão de 30 dias a partir da data do corte.
-  function aprovarCorte(batchId) {
+  async function aprovarCorte(batchId) {
     const batch = cutBatches.find((b) => b.id === batchId);
     if (!batch || batch.status !== "pendente") return;
     const expected = new Date(batch.cutAt); expected.setDate(expected.getDate() + 30);
@@ -930,12 +930,12 @@ function rowToStockItem(r) {
         producaoDate: { ...(v.producaoDate || {}), [batch.size]: expected.toISOString() },
       }),
     });
-    persistProducts(nextProducts);
-    persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "aprovado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
+    await persistProducts(nextProducts);
+    await persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "aprovado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
   }
 
-  function rejeitarCorte(batchId) {
-    persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "rejeitado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
+  async function rejeitarCorte(batchId) {
+    await persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "rejeitado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
   }
 
   // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
@@ -3242,6 +3242,20 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
   const sorted = cutBatches.slice().sort((a, b) => new Date(b.cutAt) - new Date(a.cutAt));
   const pendentes = sorted.filter((b) => b.status === "pendente");
   const outros = sorted.filter((b) => b.status !== "pendente");
+  const [processingId, setProcessingId] = useState("");
+
+  // Espera a gravação terminar de verdade antes de liberar o próximo clique
+  // — clicar em aprovar vários tamanhos bem rápido, um atrás do outro, podia
+  // fazer uma gravação "pisar" na outra e derrubar corte que ainda tava
+  // pendente da tela (sem apagar do banco, só da memória local).
+  async function handleAprovar(id) {
+    setProcessingId(id);
+    try { await aprovarCorte(id); } finally { setProcessingId(""); }
+  }
+  async function handleRejeitar(id) {
+    setProcessingId(id);
+    try { await rejeitarCorte(id); } finally { setProcessingId(""); }
+  }
 
   function codeFor(b) {
     const product = products.find((p) => p.id === b.productId);
@@ -3285,8 +3299,8 @@ function CortesAdmin({ cutBatches, products, aprovarCorte, rejeitarCorte, canApp
         )}
         {canApprove && b.status === "pendente" && (
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={() => aprovarCorte(b.id)} style={{ ...btnPrimary, padding: "6px 14px", fontSize: 12 }}><Check size={13} /> Aprovar</button>
-            <button onClick={() => rejeitarCorte(b.id)} style={{ ...btnGhostSmall, color: "#A5453F" }}><X size={13} /> Recusar</button>
+            <button onClick={() => handleAprovar(b.id)} disabled={!!processingId} style={{ ...btnPrimary, padding: "6px 14px", fontSize: 12, opacity: processingId ? 0.6 : 1 }}><Check size={13} /> {processingId === b.id ? "Aprovando..." : "Aprovar"}</button>
+            <button onClick={() => handleRejeitar(b.id)} disabled={!!processingId} style={{ ...btnGhostSmall, color: "#A5453F", opacity: processingId ? 0.6 : 1 }}><X size={13} /> {processingId === b.id ? "Recusando..." : "Recusar"}</button>
           </div>
         )}
       </div>
