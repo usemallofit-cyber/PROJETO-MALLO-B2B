@@ -2144,7 +2144,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       </div>
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} orders={orders} stockItems={stockItems} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
