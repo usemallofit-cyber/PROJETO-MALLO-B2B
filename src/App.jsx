@@ -840,7 +840,7 @@ export default function App() {
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
-    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES });
+    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES, colors: sRow.data.colors || [] } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES, colors: [] });
     setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
     setStockItems((siRows.data || []).map(rowToStockItem));
     setCutBatches((cbRows.data || []).map(rowToCutBatch));
@@ -863,10 +863,21 @@ export default function App() {
   const persistSettings = useCallback(async (next) => {
     setSettings(next);
     try {
-      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES });
+      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES, colors: next.colors || [] });
       if (error) throw error;
     } catch (e) { console.error("Erro ao salvar configurações:", e); }
   }, []);
+  // Se o nome da cor ainda não estiver no catálogo reutilizável (comparando
+  // sem diferenciar maiúsculas/minúsculas), adiciona ela — assim, na próxima
+  // vez (lançar corte ou cadastro direto), ela já aparece pronta pra
+  // escolher, sem digitar o nome nem escolher o tom de novo.
+  async function garantirCorNoCatalogo(name, hex) {
+    const nomeLimpo = (name || "").trim();
+    if (!nomeLimpo) return;
+    const existe = (settings.colors || []).some((c) => c.name.toLowerCase() === nomeLimpo.toLowerCase());
+    if (existe) return;
+    await persistSettings({ ...settings, colors: [...(settings.colors || []), { name: nomeLimpo, hex }] });
+  }
   const persistClients = useCallback(async (next) => {
     const prev = clients;
     setClients(next);
@@ -1446,7 +1457,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -2111,7 +2122,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -2142,9 +2153,9 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
           );
         })}
       </div>
-      {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} />}
+      {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} colors={settings.colors || []} garantirCorNoCatalogo={garantirCorNoCatalogo} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
-      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
+      {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} orders={orders} stockItems={stockItems} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
@@ -3047,6 +3058,9 @@ function RelatoriosCorteAdmin({ cutBatches, products, orders, stockItems }) {
 function CatalogoModelosAdmin({ settings, setSettings }) {
   const categories = settings.categories || DEFAULT_CATEGORIES;
   const [novaCategoria, setNovaCategoria] = useState("");
+  const colors = settings.colors || [];
+  const [novaCorNome, setNovaCorNome] = useState("");
+  const [novaCorHex, setNovaCorHex] = useState("#7A2E38");
 
   function addCategoria() {
     const nome = novaCategoria.trim();
@@ -3060,6 +3074,18 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
     setSettings({ ...settings, categories: categories.filter((c) => c !== nome) });
   }
 
+  function addCor() {
+    const nome = novaCorNome.trim();
+    if (!nome) return;
+    if (colors.some((c) => c.name.toLowerCase() === nome.toLowerCase())) { alert("Essa cor já existe no catálogo."); return; }
+    setSettings({ ...settings, colors: [...colors, { name: nome, hex: novaCorHex }] });
+    setNovaCorNome(""); setNovaCorHex("#7A2E38");
+  }
+  function removeCor(nome) {
+    if (!confirm(`Remover "${nome}" do catálogo de cores? Produtos que já usam essa cor continuam normalmente — só não aparece mais pra escolher em novos lançamentos.`)) return;
+    setSettings({ ...settings, colors: colors.filter((c) => c.name !== nome) });
+  }
+
   return (
     <div style={{ maxWidth: 460 }}>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Modelos</div>
@@ -3068,7 +3094,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
         <input value={novaCategoria} onChange={(e) => setNovaCategoria(e.target.value)} placeholder="Nova categoria" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCategoria()} />
         <button onClick={addCategoria} style={btnPrimary}><Plus size={14} /> Adicionar</button>
       </div>
-      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", marginBottom: 28 }}>
         {categories.map((c) => (
           <div key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
             <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c}</span>
@@ -3076,11 +3102,31 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
           </div>
         ))}
       </div>
+
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 18, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Cores</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Cores reutilizáveis ao lançar corte ou cadastrar produto direto — assim não precisa digitar o nome nem escolher o tom de novo. Cores novas digitadas em qualquer uma das duas telas já entram aqui sozinhas.</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 18, alignItems: "center" }}>
+        <input value={novaCorNome} onChange={(e) => setNovaCorNome(e.target.value)} placeholder="Nova cor" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCor()} />
+        <input type="color" value={novaCorHex} onChange={(e) => setNovaCorHex(e.target.value)} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%", flexShrink: 0 }} />
+        <button onClick={addCor} style={btnPrimary}><Plus size={14} /> Adicionar</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+        {colors.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: TOKENS.graphite }}>Nenhuma cor cadastrada ainda.</div>}
+        {colors.map((c) => (
+          <div key={c.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 18, height: 18, borderRadius: "50%", background: c.hex, border: `1px solid ${TOKENS.line}`, display: "inline-block" }} />
+              <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c.name}</span>
+            </div>
+            <button onClick={() => removeCor(c.name)} style={iconBtnStyle}><Trash2 size={15} color="#A5453F" /></button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -3090,7 +3136,7 @@ function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches
   if (mode === "coletar-lista") return <ColetarPedidoLista orders={orders} onSelect={(o) => { setActiveOrder(o); setMode("coletar-pedido"); }} onView={(o) => { setActiveOrder(o); setMode("ver-pedido"); }} onBack={() => setMode("menu")} />;
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
-  if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} persistProducts={persistProducts} onBack={() => setMode("menu")} />;
+  if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} colors={settings.colors || []} garantirCorNoCatalogo={garantirCorNoCatalogo} lancarCorte={lancarCorte} persistProducts={persistProducts} onBack={() => setMode("menu")} />;
   if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} stockItems={stockItems} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
@@ -3365,10 +3411,10 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
 }
 
 function novaEntradaCor() {
-  return { key: uid("ce_"), variantId: "", novaCor: false, colorName: "", hex: "#7A2E38", images: [], sizeQty: { P: 0, M: 0, G: 0, GG: 0 } };
+  return { key: uid("ce_"), variantId: "", novaCor: false, colorName: "", hex: "#7A2E38", catalogChoice: "__nova__", images: [], sizeQty: { P: 0, M: 0, G: 0, GG: 0 } };
 }
 
-function LancarCorteView({ products, categories, lancarCorte, persistProducts, onBack }) {
+function LancarCorteView({ products, categories, colors, garantirCorNoCatalogo, lancarCorte, persistProducts, onBack }) {
   const [novoModelo, setNovoModelo] = useState(false);
   const [productId, setProductId] = useState(products[0]?.id || "");
   const product = products.find((p) => p.id === productId);
@@ -3422,6 +3468,14 @@ function LancarCorteView({ products, categories, lancarCorte, persistProducts, o
 
     setSaving(true);
     try {
+      // Cor digitada na hora (não escolhida do catálogo) já entra pro
+      // catálogo reutilizável, pra não precisar ser criada de novo depois.
+      for (const en of entriesValidas) {
+        if ((novoModelo || en.novaCor) && en.catalogChoice === "__nova__") {
+          await garantirCorNoCatalogo(en.colorName, en.hex);
+        }
+      }
+
       const zeroStock = { P: 0, M: 0, G: 0, GG: 0 };
       let targetProduct;
       const variantByKey = {};
@@ -3544,12 +3598,25 @@ function LancarCorteView({ products, categories, lancarCorte, persistProducts, o
             )}
 
             {(novoModelo || en.novaCor) && (
-              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>Nome da cor</label>
-                  <input value={en.colorName} onChange={(e) => updateEntry(en.key, { colorName: e.target.value })} style={inputStyle} placeholder="Ex: Vinho" />
-                </div>
-                <input type="color" value={en.hex} onChange={(e) => updateEntry(en.key, { hex: e.target.value })} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
+              <div style={{ marginBottom: 10 }}>
+                <label style={labelStyle}>Cor</label>
+                <select value={en.catalogChoice} onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "__nova__") updateEntry(en.key, { catalogChoice: "__nova__", colorName: "", hex: "#7A2E38" });
+                  else { const found = colors.find((c) => c.name === val); updateEntry(en.key, { catalogChoice: val, colorName: found?.name || "", hex: found?.hex || "#7A2E38" }); }
+                }} style={inputStyle}>
+                  <option value="__nova__">+ Nova cor</option>
+                  {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                </select>
+                {en.catalogChoice === "__nova__" && (
+                  <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={labelStyle}>Nome da cor nova</label>
+                      <input value={en.colorName} onChange={(e) => updateEntry(en.key, { colorName: e.target.value })} style={inputStyle} placeholder="Ex: Vinho" />
+                    </div>
+                    <input type="color" value={en.hex} onChange={(e) => updateEntry(en.key, { hex: e.target.value })} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
+                  </div>
+                )}
               </div>
             )}
 
@@ -3757,17 +3824,15 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
   return (
     <div>
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 18px", flexWrap: "wrap", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 18px", flexWrap: "wrap", gap: 8, minHeight: 36 }}>
         <div style={{ fontFamily: "Georgia, serif", fontSize: 20 }}>Cortes lançados</div>
-        {marcadosParaExcluir.length > 0 && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {confirmandoExclusao && <span style={{ fontSize: 11.5, color: "#A5453F" }}>Clique de novo pra confirmar</span>}
-            <button onClick={handleExcluirSelecionados} disabled={deleting} style={{ ...btnGhostSmall, color: "#A5453F", borderColor: "#A5453F", background: confirmandoExclusao ? "#FCEBEB" : "#fff" }}>
-              <Trash2 size={13} /> {deleting ? "Excluindo..." : confirmandoExclusao ? `Confirmar exclusão (${marcadosParaExcluir.length})` : `Excluir selecionado(s) (${marcadosParaExcluir.length})`}
-            </button>
-            {confirmandoExclusao && <button onClick={() => setConfirmandoExclusao(false)} style={btnGhostSmall}>Cancelar</button>}
-          </div>
-        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", visibility: marcadosParaExcluir.length > 0 ? "visible" : "hidden" }}>
+          <span style={{ fontSize: 11.5, color: "#A5453F", visibility: confirmandoExclusao ? "visible" : "hidden" }}>Clique de novo pra confirmar</span>
+          <button onClick={handleExcluirSelecionados} disabled={deleting} style={{ ...btnGhostSmall, color: "#A5453F", borderColor: "#A5453F", background: confirmandoExclusao ? "#FCEBEB" : "#fff" }}>
+            <Trash2 size={13} /> {deleting ? "Excluindo..." : confirmandoExclusao ? `Confirmar exclusão (${marcadosParaExcluir.length})` : `Excluir selecionado(s) (${marcadosParaExcluir.length})`}
+          </button>
+          <button onClick={() => setConfirmandoExclusao(false)} style={{ ...btnGhostSmall, visibility: confirmandoExclusao ? "visible" : "hidden" }}>Cancelar</button>
+        </div>
       </div>
       <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Pendentes ({pendentes.length})</div>
       {pendentes.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 18 }}>Nenhum corte pendente.</div>}
@@ -3789,7 +3854,7 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
   );
 }
 
-function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categories }) {
+function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categories, colors, garantirCorNoCatalogo }) {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filterCat, setFilterCat] = useState("Todas");
@@ -4003,7 +4068,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
           );
         })}
       </div>
-      {showForm && <ProductForm initial={editing} categories={categories} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
+      {showForm && <ProductForm initial={editing} categories={categories} colors={colors} garantirCorNoCatalogo={garantirCorNoCatalogo} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
 
       {labelModal && (
         <div style={overlayStyle}>
@@ -4178,7 +4243,7 @@ function ItemListAdmin({ stockItems, setStockItems, orders, products, setProduct
   );
 }
 
-function ProductForm({ initial, categories, onCancel, onSave }) {
+function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCancel, onSave }) {
   const [p, setP] = useState(initial);
 
   function addVariant() { setP((s) => ({ ...s, variants: [...s.variants, { id: uid("v_"), color: "", hex: "#8C3A3A", images: [], stock: { P: 0, M: 0, G: 0, GG: 0 } }] })); }
@@ -4191,6 +4256,12 @@ function ProductForm({ initial, categories, onCancel, onSave }) {
     updateVariant(id, { images: [...current, ...dataUrls] });
   }
   function removeVariantImage(id, idx, current) { updateVariant(id, { images: current.filter((_, i) => i !== idx) }); }
+  async function handleSave() {
+    for (const v of p.variants) {
+      if (v.color?.trim()) await garantirCorNoCatalogo(v.color, v.hex);
+    }
+    onSave(p);
+  }
 
   return (
     <div style={overlayStyle}>
@@ -4226,7 +4297,7 @@ function ProductForm({ initial, categories, onCancel, onSave }) {
           {p.variants.length === 0 && <div style={{ fontSize: 12, color: TOKENS.graphite, padding: 12, background: TOKENS.ivorySoft, borderRadius: 3 }}>Nenhuma cor adicionada. Cadastre pelo menos uma cor com suas fotos e estoque.</div>}
 
           {p.variants.map((v) => (
-            <VariantEditor key={v.id} v={v}
+            <VariantEditor key={v.id} v={v} colors={colors}
               onChange={(patch) => updateVariant(v.id, patch)}
               onRemove={() => removeVariant(v.id)}
               onAddImages={(files) => addVariantImages(v.id, files, v.images)}
@@ -4237,22 +4308,28 @@ function ProductForm({ initial, categories, onCancel, onSave }) {
         </div>
         <div style={modalFooterStyle}>
           <button onClick={onCancel} style={btnGhostSmall}>Cancelar</button>
-          <button onClick={() => onSave(p)} style={btnPrimary} disabled={!p.model.trim()}><Check size={15} /> Salvar modelo</button>
+          <button onClick={handleSave} style={btnPrimary} disabled={!p.model.trim()}><Check size={15} /> Salvar modelo</button>
         </div>
       </div>
     </div>
   );
 }
 
-function VariantEditor({ v, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
+function VariantEditor({ v, colors, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
   const fileRef = useRef();
 
   return (
     <div style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, marginBottom: 12, background: TOKENS.ivorySoft }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
           <input type="color" value={v.hex} onChange={(e) => onChange({ hex: e.target.value })} style={{ width: 34, height: 34, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
           <input value={v.color} onChange={(e) => onChange({ color: e.target.value })} placeholder="Nome da cor (ex: Vermelho)" style={{ ...inputStyle, maxWidth: 220 }} />
+          {colors?.length > 0 && (
+            <select value="" onChange={(e) => { const found = colors.find((c) => c.name === e.target.value); if (found) onChange({ color: found.name, hex: found.hex }); }} style={{ ...inputStyle, width: "auto", padding: "8px 10px" }}>
+              <option value="">Usar cor já cadastrada...</option>
+              {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+          )}
         </div>
         <button onClick={onRemove} style={{ ...iconBtnStyle, color: "#A5453F" }}><Trash2 size={15} /></button>
       </div>
