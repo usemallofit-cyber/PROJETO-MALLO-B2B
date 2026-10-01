@@ -3703,12 +3703,14 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
 
   const [markedDelete, setMarkedDelete] = useState({});
   const [deleting, setDeleting] = useState(false);
-  function toggleDelete(id) { setMarkedDelete((s) => ({ ...s, [id]: !s[id] })); }
+  function toggleDelete(id) { setMarkedDelete((s) => ({ ...s, [id]: !s[id] })); setConfirmandoExclusao(false); }
   const marcadosParaExcluir = sorted.filter((b) => markedDelete[b.id]);
 
+  const [confirmandoExclusao, setConfirmandoExclusao] = useState(false);
   async function handleExcluirSelecionados() {
     if (!marcadosParaExcluir.length) return;
-    if (!confirm(`Excluir ${marcadosParaExcluir.length} corte(s) lançado(s)? A quantidade em produção é removida da vitrine, mas o registro continua no histórico marcado como excluído.`)) return;
+    if (!confirmandoExclusao) { setConfirmandoExclusao(true); return; }
+    setConfirmandoExclusao(false);
     setDeleting(true);
     try {
       const res = await excluirCortes(marcadosParaExcluir.map((b) => b.id));
@@ -3757,9 +3759,13 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 18px", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontFamily: "Georgia, serif", fontSize: 20 }}>Cortes lançados</div>
         {marcadosParaExcluir.length > 0 && (
-          <button onClick={handleExcluirSelecionados} disabled={deleting} style={{ ...btnGhostSmall, color: "#A5453F", borderColor: "#A5453F" }}>
-            <Trash2 size={13} /> {deleting ? "Excluindo..." : `Excluir selecionado(s) (${marcadosParaExcluir.length})`}
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {confirmandoExclusao && <span style={{ fontSize: 11.5, color: "#A5453F" }}>Clique de novo pra confirmar</span>}
+            <button onClick={handleExcluirSelecionados} disabled={deleting} style={{ ...btnGhostSmall, color: "#A5453F", borderColor: "#A5453F", background: confirmandoExclusao ? "#FCEBEB" : "#fff" }}>
+              <Trash2 size={13} /> {deleting ? "Excluindo..." : confirmandoExclusao ? `Confirmar exclusão (${marcadosParaExcluir.length})` : `Excluir selecionado(s) (${marcadosParaExcluir.length})`}
+            </button>
+            {confirmandoExclusao && <button onClick={() => setConfirmandoExclusao(false)} style={btnGhostSmall}>Cancelar</button>}
+          </div>
         )}
       </div>
       <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Pendentes ({pendentes.length})</div>
