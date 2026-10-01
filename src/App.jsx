@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -3410,6 +3410,42 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   );
 }
 
+// Select próprio pra cor — o <select> nativo do navegador não deixa colorir
+// dentro da lista de opções, só o valor escolhido. Esse aqui mostra a
+// bolinha em CADA item da lista, com borda sempre visível (importante pra
+// cores claras, tipo branco, não sumirem contra o fundo).
+function ColorSelect({ value, options, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(() => {
+    function onDocClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+  const selected = options.find((o) => o.value === value);
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button type="button" onClick={() => setOpen((o) => !o)} style={{ ...inputStyle, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", textAlign: "left", width: "100%", background: "#fff" }}>
+        {selected?.hex && <span style={{ width: 16, height: 16, borderRadius: "50%", background: selected.hex, border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} />}
+        <span style={{ flex: 1, color: TOKENS.ink }}>{selected?.label || "Selecione"}</span>
+        <ChevronDown size={14} color={TOKENS.graphite} />
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, marginTop: 4, maxHeight: 220, overflowY: "auto", zIndex: 30, boxShadow: "0 6px 16px rgba(0,0,0,0.14)" }}>
+          {options.map((o) => (
+            <div key={o.value} onClick={() => { onChange(o.value); setOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", fontSize: 13, color: TOKENS.ink, background: o.value === value ? TOKENS.ivorySoft : "#fff" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = TOKENS.ivorySoft; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = o.value === value ? TOKENS.ivorySoft : "#fff"; }}>
+              {o.hex ? <span style={{ width: 16, height: 16, borderRadius: "50%", background: o.hex, border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} /> : <span style={{ width: 16, flexShrink: 0 }} />}
+              <span>{o.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function novaEntradaCor() {
   return { key: uid("ce_"), variantId: "", novaCor: false, colorName: "", hex: "#7A2E38", catalogChoice: "__nova__", images: [], sizeQty: { P: 0, M: 0, G: 0, GG: 0 } };
 }
@@ -3587,33 +3623,34 @@ function LancarCorteView({ products, categories, colors, garantirCorNoCatalogo, 
             {!novoModelo && (
               <div style={{ marginBottom: 10 }}>
                 <label style={labelStyle}>Cor</label>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <select value={en.novaCor ? "__nova__" : en.variantId} onChange={(e) => {
-                    if (e.target.value === "__nova__") updateEntry(en.key, { novaCor: true, variantId: "", images: [] });
-                    else updateEntry(en.key, { novaCor: false, variantId: e.target.value, images: product?.variants.find((v) => v.id === e.target.value)?.images || [] });
-                  }} style={{ ...inputStyle, flex: 1 }}>
-                    {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
-                    <option value="__nova__">+ Nova cor para este modelo</option>
-                  </select>
-                  {!en.novaCor && <span style={{ width: 22, height: 22, borderRadius: "50%", background: product?.variants.find((v) => v.id === en.variantId)?.hex || "#ccc", border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} />}
-                </div>
+                <ColorSelect
+                  value={en.novaCor ? "__nova__" : en.variantId}
+                  options={[
+                    ...(product?.variants.map((v) => ({ value: v.id, label: v.color || "(sem nome)", hex: v.hex })) || []),
+                    { value: "__nova__", label: "+ Nova cor para este modelo", hex: null },
+                  ]}
+                  onChange={(val) => {
+                    if (val === "__nova__") updateEntry(en.key, { novaCor: true, variantId: "", images: [] });
+                    else updateEntry(en.key, { novaCor: false, variantId: val, images: product?.variants.find((v) => v.id === val)?.images || [] });
+                  }}
+                />
               </div>
             )}
 
             {(novoModelo || en.novaCor) && (
               <div style={{ marginBottom: 10 }}>
                 <label style={labelStyle}>Cor</label>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <select value={en.catalogChoice} onChange={(e) => {
-                    const val = e.target.value;
+                <ColorSelect
+                  value={en.catalogChoice}
+                  options={[
+                    { value: "__nova__", label: "+ Nova cor", hex: null },
+                    ...colors.map((c) => ({ value: c.name, label: c.name, hex: c.hex })),
+                  ]}
+                  onChange={(val) => {
                     if (val === "__nova__") updateEntry(en.key, { catalogChoice: "__nova__", colorName: "", hex: "#7A2E38" });
                     else { const found = colors.find((c) => c.name === val); updateEntry(en.key, { catalogChoice: val, colorName: found?.name || "", hex: found?.hex || "#7A2E38" }); }
-                  }} style={{ ...inputStyle, flex: 1 }}>
-                    <option value="__nova__">+ Nova cor</option>
-                    {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                  </select>
-                  {en.catalogChoice !== "__nova__" && <span style={{ width: 22, height: 22, borderRadius: "50%", background: en.hex, border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} />}
-                </div>
+                  }}
+                />
                 {en.catalogChoice === "__nova__" && (
                   <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 8 }}>
                     <div style={{ flex: 1 }}>
@@ -4331,10 +4368,10 @@ function VariantEditor({ v, colors, onChange, onRemove, onAddImages, onRemoveIma
           <input type="color" value={v.hex} onChange={(e) => onChange({ hex: e.target.value })} style={{ width: 34, height: 34, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
           <input value={v.color} onChange={(e) => onChange({ color: e.target.value })} placeholder="Nome da cor (ex: Vermelho)" style={{ ...inputStyle, maxWidth: 220 }} />
           {colors?.length > 0 && (
-            <select value="" onChange={(e) => { const found = colors.find((c) => c.name === e.target.value); if (found) onChange({ color: found.name, hex: found.hex }); }} style={{ ...inputStyle, width: "auto", padding: "8px 10px" }}>
-              <option value="">Usar cor já cadastrada...</option>
-              {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-            </select>
+            <div style={{ width: 200 }}>
+              <ColorSelect value="" options={[{ value: "", label: "Usar cor já cadastrada...", hex: null }, ...colors.map((c) => ({ value: c.name, label: c.name, hex: c.hex }))]}
+                onChange={(val) => { const found = colors.find((c) => c.name === val); if (found) onChange({ color: found.name, hex: found.hex }); }} />
+            </div>
           )}
         </div>
         <button onClick={onRemove} style={{ ...iconBtnStyle, color: "#A5453F" }}><Trash2 size={15} /></button>
