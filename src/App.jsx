@@ -3587,27 +3587,33 @@ function LancarCorteView({ products, categories, colors, garantirCorNoCatalogo, 
             {!novoModelo && (
               <div style={{ marginBottom: 10 }}>
                 <label style={labelStyle}>Cor</label>
-                <select value={en.novaCor ? "__nova__" : en.variantId} onChange={(e) => {
-                  if (e.target.value === "__nova__") updateEntry(en.key, { novaCor: true, variantId: "", images: [] });
-                  else updateEntry(en.key, { novaCor: false, variantId: e.target.value, images: product?.variants.find((v) => v.id === e.target.value)?.images || [] });
-                }} style={inputStyle}>
-                  {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
-                  <option value="__nova__">+ Nova cor para este modelo</option>
-                </select>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <select value={en.novaCor ? "__nova__" : en.variantId} onChange={(e) => {
+                    if (e.target.value === "__nova__") updateEntry(en.key, { novaCor: true, variantId: "", images: [] });
+                    else updateEntry(en.key, { novaCor: false, variantId: e.target.value, images: product?.variants.find((v) => v.id === e.target.value)?.images || [] });
+                  }} style={{ ...inputStyle, flex: 1 }}>
+                    {product?.variants.map((v) => <option key={v.id} value={v.id}>{v.color || "(sem nome)"}</option>)}
+                    <option value="__nova__">+ Nova cor para este modelo</option>
+                  </select>
+                  {!en.novaCor && <span style={{ width: 22, height: 22, borderRadius: "50%", background: product?.variants.find((v) => v.id === en.variantId)?.hex || "#ccc", border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} />}
+                </div>
               </div>
             )}
 
             {(novoModelo || en.novaCor) && (
               <div style={{ marginBottom: 10 }}>
                 <label style={labelStyle}>Cor</label>
-                <select value={en.catalogChoice} onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === "__nova__") updateEntry(en.key, { catalogChoice: "__nova__", colorName: "", hex: "#7A2E38" });
-                  else { const found = colors.find((c) => c.name === val); updateEntry(en.key, { catalogChoice: val, colorName: found?.name || "", hex: found?.hex || "#7A2E38" }); }
-                }} style={inputStyle}>
-                  <option value="__nova__">+ Nova cor</option>
-                  {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                </select>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <select value={en.catalogChoice} onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "__nova__") updateEntry(en.key, { catalogChoice: "__nova__", colorName: "", hex: "#7A2E38" });
+                    else { const found = colors.find((c) => c.name === val); updateEntry(en.key, { catalogChoice: val, colorName: found?.name || "", hex: found?.hex || "#7A2E38" }); }
+                  }} style={{ ...inputStyle, flex: 1 }}>
+                    <option value="__nova__">+ Nova cor</option>
+                    {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                  </select>
+                  {en.catalogChoice !== "__nova__" && <span style={{ width: 22, height: 22, borderRadius: "50%", background: en.hex, border: `1px solid ${TOKENS.line}`, flexShrink: 0 }} />}
+                </div>
                 {en.catalogChoice === "__nova__" && (
                   <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 8 }}>
                     <div style={{ flex: 1 }}>
