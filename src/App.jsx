@@ -3717,7 +3717,8 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
       setMarkedDelete({});
       if (res.bloqueados?.length) alert("Alguns itens continuam no estoque normalmente, por já terem sido recebidos ou vendidos:\n\n" + res.bloqueados.join("\n"));
     } catch (e) {
-      alert("Não foi possível excluir agora. Tente novamente em alguns segundos.");
+      console.error("Erro ao excluir corte:", e);
+      alert(`Não foi possível excluir agora.\nDetalhe do erro: ${e?.message || e}`);
     } finally { setDeleting(false); }
   }
 
