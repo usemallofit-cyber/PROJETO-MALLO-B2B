@@ -764,6 +764,21 @@ function maskCNPJ(v) {
   if (d.length > 2) return d.replace(/^(\d{2})(\d{0,3})/, "$1.$2");
   return d;
 }
+// Confere o dígito verificador de verdade (algoritmo oficial da Receita),
+// não só a formatação — pega CNPJ digitado errado ou inventado.
+function isValidCNPJ(v) {
+  const d = (v || "").replace(/\D/g, "");
+  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+  const calc = (base) => {
+    let pesos = base.length === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    const soma = base.split("").reduce((a, n, i) => a + Number(n) * pesos[i], 0);
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  const dv1 = calc(d.slice(0, 12));
+  const dv2 = calc(d.slice(0, 12) + dv1);
+  return d === d.slice(0, 12) + dv1 + dv2;
+}
 function maskCEP(v) {
   const d = v.replace(/\D/g, "").slice(0, 8);
   if (d.length > 5) return d.replace(/^(\d{5})(\d{0,3})/, "$1-$2");
@@ -1033,6 +1048,10 @@ function rowToStockItem(r) {
   function scanReceiveStock(code) {
     const raw = (code || "").trim().toUpperCase();
     if (!raw) return { ok: false, message: "Código não reconhecido." };
+    // Guarda o estado de antes pra poder desfazer esse bipe específico depois
+    // (um "desfazer" simples: volta exatamente pro que estava antes).
+    const prevProducts = products;
+    const prevStockItems = stockItems;
 
     // Primeiro, tenta achar uma peça já rastreada individualmente (nascida
     // na aprovação de um corte, ou de uma bipada anterior) por esse código
@@ -1065,7 +1084,7 @@ function rowToStockItem(r) {
           });
           persistProducts(nextProducts);
           persistStockItems(stockItems.map((si) => si.id === existing.id ? { ...si, confirmed: true, confirmedAt: new Date().toISOString(), orderId: pedidoReservando.id } : si));
-          return { ok: true, reservedForOrder: true, message: `${product.model} · ${variant.color} · ${existing.size} — peça já vendida! Vai para o pedido de ${pedidoReservando.clientName} (não entrou em pronta entrega).` };
+          return { ok: true, reservedForOrder: true, message: `${product.model} · ${variant.color} · ${existing.size} — peça já vendida! Vai para o pedido de ${pedidoReservando.clientName} (não entrou em pronta entrega).`, undo: () => { persistProducts(prevProducts); persistStockItems(prevStockItems); } };
         }
 
         const newStock = (variant.stock?.[existing.size] || 0) + 1;
@@ -1079,7 +1098,7 @@ function rowToStockItem(r) {
         });
         persistProducts(nextProducts);
         persistStockItems(stockItems.map((si) => si.id === existing.id ? { ...si, confirmed: true, confirmedAt: new Date().toISOString() } : si));
-        return { ok: true, message: `${product.model} · ${variant.color} · ${existing.size} (confirmado da produção) — pronta entrega agora: ${newStock}` };
+        return { ok: true, message: `${product.model} · ${variant.color} · ${existing.size} (confirmado da produção) — pronta entrega agora: ${newStock}`, undo: () => { persistProducts(prevProducts); persistStockItems(prevStockItems); } };
       }
     }
 
@@ -1109,7 +1128,7 @@ function rowToStockItem(r) {
       sku: shortSkuFor(product.sku, product.model), color: variant.color, hex: variant.hex, size: match.size,
       seq, orderId: null, confirmed: true, confirmedAt: new Date().toISOString(),
     }]);
-    return { ok: true, message: `${product.model} · ${variant.color} · ${match.size}${veioDaProducao ? " (confirmado da produção)" : ""} — pronta entrega agora: ${newStock}` };
+    return { ok: true, message: `${product.model} · ${variant.color} · ${match.size}${veioDaProducao ? " (confirmado da produção)" : ""} — pronta entrega agora: ${newStock}`, undo: () => { persistProducts(prevProducts); persistStockItems(prevStockItems); } };
   }
 
   // Bipar uma peça em "Coletar pedido": confere se ela pertence ao pedido
@@ -1117,6 +1136,7 @@ function rowToStockItem(r) {
   // estoque de novo (o abate já aconteceu quando o pedido foi finalizado).
   function scanCollectOrder(order, code) {
     const raw = (code || "").trim().toUpperCase();
+    const prevOrders = orders;
     // Se o código bipado é de uma peça individual rastreada, confere se ela
     // já passou por "Receber estoque" — uma etiqueta impressa de uma peça
     // ainda em produção não pode ser aceita aqui como se já estivesse pronta.
@@ -1142,7 +1162,7 @@ function rowToStockItem(r) {
     if (collected >= item.qty) return { ok: false, alreadyComplete: true, message: `"${item.model}" (${item.color}, ${item.size}) já está completo.` };
     const nextItems = order.items.map((it, i) => i === idx ? { ...it, collected: collected + 1, collectedIds: specificItem ? [...(it.collectedIds || []), specificItem.id] : it.collectedIds } : it);
     persistOrders(orders.map((o) => o.id === order.id ? { ...o, items: nextItems } : o));
-    return { ok: true, message: `${item.model} · ${item.color} · ${item.size} — ${collected + 1} de ${item.qty}` };
+    return { ok: true, message: `${item.model} · ${item.color} · ${item.size} — ${collected + 1} de ${item.qty}`, undo: () => persistOrders(prevOrders) };
   }
 
   function updateOrderStatus(orderId, newStatus, extra) {
@@ -2062,7 +2082,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       {tab === "produtos" && <ProdutosAdmin products={products} setProducts={setProducts} stockItems={stockItems} setStockItems={setStockItems} categories={settings.categories || DEFAULT_CATEGORIES} />}
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
       {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
-      {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} />}
+      {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} orders={orders} stockItems={stockItems} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
@@ -2533,6 +2553,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
 function ClientForm({ initial, onCancel, onSave }) {
   const [c, setC] = useState(initial);
   const [buscando, setBuscando] = useState("");
+  const [cnpjInvalido, setCnpjInvalido] = useState(false);
   const [erros, setErros] = useState({});
 
   async function handleCnpjChange(value) {
@@ -2540,6 +2561,8 @@ function ClientForm({ initial, onCancel, onSave }) {
     setC((s) => ({ ...s, cnpj: masked }));
     const digits = masked.replace(/\D/g, "");
     if (digits.length === 14) {
+      if (!isValidCNPJ(digits)) { setCnpjInvalido(true); return; }
+      setCnpjInvalido(false);
       setBuscando("cnpj");
       const dados = await buscarCNPJ(digits);
       setBuscando("");
@@ -2551,6 +2574,8 @@ function ClientForm({ initial, onCancel, onSave }) {
           address: s.address || [dados.logradouro, dados.numero, dados.bairro, dados.municipio, dados.uf].filter(Boolean).join(", "),
         }));
       }
+    } else {
+      setCnpjInvalido(false);
     }
   }
 
@@ -2571,6 +2596,7 @@ function ClientForm({ initial, onCancel, onSave }) {
   function trySave() {
     const novosErros = {};
     CLIENT_FIELDS.forEach((f) => { if (!c[f.key] || !String(c[f.key]).trim()) novosErros[f.key] = true; });
+    if (c.cnpj && !isValidCNPJ(c.cnpj)) { novosErros.cnpj = true; setCnpjInvalido(true); }
     setErros(novosErros);
     if (Object.keys(novosErros).length > 0) return;
     onSave(c);
@@ -2590,7 +2616,7 @@ function ClientForm({ initial, onCancel, onSave }) {
             </div>
           )}
           {CLIENT_FIELDS.map((f) => {
-            const comErro = !!erros[f.key];
+            const comErro = !!erros[f.key] || (f.key === "cnpj" && cnpjInvalido);
             const estilo = comErro ? { ...inputStyle, border: "1px solid #A5453F", background: "#FCEBEB" } : inputStyle;
             return (
               <div key={f.key}>
@@ -2606,7 +2632,9 @@ function ClientForm({ initial, onCancel, onSave }) {
                 ) : (
                   <input value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={estilo} />
                 )}
-                {comErro && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 2, marginBottom: 4 }}>Este campo é obrigatório.</div>}
+                {f.key === "cnpj" && cnpjInvalido ? (
+                  <div style={{ fontSize: 11, color: "#A5453F", marginTop: 2, marginBottom: 4 }}>Esse CNPJ não é válido — confira os números.</div>
+                ) : comErro && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 2, marginBottom: 4 }}>Este campo é obrigatório.</div>}
               </div>
             );
           })}
@@ -2662,9 +2690,11 @@ function computeCutReports(cutBatches, products) {
   return { totalCortado, totalPendente, totalAprovado, totalRejeitado, modelosRanking, porTamanho, cortadoresRanking, pendentes, totalProntaEstoque, totalProducaoEstoque, gargalos };
 }
 
-function RelatoriosCorteAdmin({ cutBatches, products }) {
+function RelatoriosCorteAdmin({ cutBatches, products, orders, stockItems }) {
   const [yearFilter, setYearFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("all");
+  const [limiteBaixo, setLimiteBaixo] = useState(5);
+  const [limiteDiasEspera, setLimiteDiasEspera] = useState(7);
   const years = useMemo(() => Array.from(new Set(cutBatches.map((b) => b.cutAt.slice(0, 4)))).sort().reverse(), [cutBatches]);
   const MESES = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
   const filteredBatches = useMemo(() => cutBatches.filter((b) => {
@@ -2676,6 +2706,52 @@ function RelatoriosCorteAdmin({ cutBatches, products }) {
   const maxModelo = Math.max(1, ...r.modelosRanking.map((m) => m.qty));
   const maxTamanho = Math.max(1, ...Object.values(r.porTamanho));
   const maxCortador = Math.max(1, ...r.cortadoresRanking.map((c) => c.qty));
+
+  // Produtos/cores com pronta entrega abaixo do limite escolhido — pra saber
+  // o que lançar corte antes de faltar de vez.
+  const estoqueBaixo = useMemo(() => {
+    const linhas = [];
+    products.forEach((p) => {
+      (p.variants || []).forEach((v) => {
+        const pronta = SIZES.reduce((a, s) => a + (v.stock?.[s] || 0), 0);
+        if (pronta < limiteBaixo) linhas.push({ model: p.model, color: v.color || "(sem nome)", pronta });
+      });
+    });
+    return linhas.sort((a, b) => a.pronta - b.pronta);
+  }, [products, limiteBaixo]);
+
+  // Pedidos com item "em produção" ainda sem peça física confirmada o
+  // bastante pra cobrir a quantidade comprada — pra cobrar a produção antes
+  // do cliente reclamar.
+  const pedidosEsperando = useMemo(() => {
+    const ativos = (orders || []).filter((o) => o.status !== "Pedido completo" && o.status !== "Pedido cancelado");
+    const linhas = [];
+    ativos.forEach((o) => {
+      (o.items || []).forEach((it) => {
+        if (it.stockType !== "producao") return;
+        const confirmadas = (stockItems || []).filter((si) => si.orderId === o.id && si.productId === it.productId && si.variantId === it.variantId && si.size === it.size && si.confirmed).length;
+        const faltam = it.qty - confirmadas;
+        if (faltam > 0) {
+          linhas.push({ orderId: o.id, cliente: o.clientName, model: it.model, color: it.color, size: it.size, faltam, dias: Math.floor((Date.now() - new Date(o.date).getTime()) / 86400000) });
+        }
+      });
+    });
+    return linhas.sort((a, b) => b.dias - a.dias);
+  }, [orders, stockItems]);
+
+  // Lucro = preço de venda - preço de custo, por pedido, somado no período
+  // filtrado (mesmo ano/mês do resto do relatório).
+  const lucro = useMemo(() => {
+    const inRange = (orders || []).filter((o) => {
+      if (o.status === "Pedido cancelado") return false;
+      if (yearFilter !== "all" && o.date.slice(0, 4) !== yearFilter) return false;
+      if (monthFilter !== "all" && o.date.slice(5, 7) !== monthFilter) return false;
+      return true;
+    });
+    let receita = 0, custo = 0;
+    inRange.forEach((o) => (o.items || []).forEach((it) => { receita += (it.price || 0) * it.qty; custo += (it.costPrice || 0) * it.qty; }));
+    return { receita, custo, lucro: receita - custo, pedidos: inRange.length };
+  }, [orders, yearFilter, monthFilter]);
 
   function diasDesde(iso) { return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000); }
   function labelMes(m) {
@@ -2803,6 +2879,64 @@ function RelatoriosCorteAdmin({ cutBatches, products }) {
           </div>
         )}
       </div>
+
+      <div style={{ margin: "24px 0" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 10 }}>Lucro do período ({lucro.pedidos} pedido{lucro.pedidos === 1 ? "" : "s"})</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Receita</div>
+            <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink }}>R$ {formatBRL(lucro.receita)}</div>
+          </div>
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Custo</div>
+            <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.graphite }}>R$ {formatBRL(lucro.custo)}</div>
+          </div>
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Lucro</div>
+            <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: lucro.lucro >= 0 ? "#27500A" : "#A5453F" }}>R$ {formatBRL(lucro.lucro)}</div>
+          </div>
+        </div>
+        {lucro.custo === 0 && lucro.receita > 0 && <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 6 }}>Se o custo aparecer zerado, é porque os produtos desse período não têm preço de custo cadastrado em Produtos & Estoque.</div>}
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink }}>Estoque baixo (pronta entrega abaixo de</div>
+          <input type="number" min={0} value={limiteBaixo} onChange={(e) => setLimiteBaixo(Math.max(0, Number(e.target.value) || 0))} style={{ ...inputStyle, width: 60, padding: "4px 8px" }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink }}>peças)</span>
+        </div>
+        {estoqueBaixo.length === 0 ? (
+          <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Nenhuma cor abaixo desse limite. 🎉</div>
+        ) : (
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+            {estoqueBaixo.map((e, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", fontSize: 12.5, borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+                <span>{e.model} · {e.color}</span>
+                <span style={{ fontWeight: 600, color: e.pronta === 0 ? "#A5453F" : "#633806" }}>{e.pronta === 0 ? "esgotado" : `${e.pronta} peça(s)`}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink }}>Pedidos esperando produção ({pedidosEsperando.length})</div>
+          <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>destacar em vermelho após <input type="number" min={0} value={limiteDiasEspera} onChange={(e) => setLimiteDiasEspera(Math.max(0, Number(e.target.value) || 0))} style={{ ...inputStyle, width: 44, padding: "3px 6px", display: "inline-block" }} /> dias</div>
+        </div>
+        {pedidosEsperando.length === 0 ? (
+          <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Nenhum pedido esperando peça em produção. 🎉</div>
+        ) : (
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+            {pedidosEsperando.map((e, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 14px", fontSize: 12.5, borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+                <span>{e.model} · {e.color} · {e.size} — {e.faltam} peça(s) · pedido de {e.cliente}</span>
+                <span style={{ color: e.dias >= limiteDiasEspera ? "#A5453F" : TOKENS.graphite, fontWeight: e.dias >= limiteDiasEspera ? 600 : 400 }}>{e.dias === 0 ? "hoje" : `há ${e.dias} dia${e.dias === 1 ? "" : "s"}`}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2889,6 +3023,7 @@ function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches
 function ReceberEstoqueView({ scanReceiveStock, onBack }) {
   const [code, setCode] = useState("");
   const [log, setLog] = useState([]);
+  const [lastUndo, setLastUndo] = useState(null);
   const inputRef = useRef();
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -2897,8 +3032,15 @@ function ReceberEstoqueView({ scanReceiveStock, onBack }) {
     if (!code.trim()) return;
     const result = scanReceiveStock(code.trim());
     setLog((l) => [{ ...result, code: code.trim() }, ...l].slice(0, 40));
+    setLastUndo(result.ok && result.undo ? { undo: result.undo, label: code.trim() } : null);
     setCode("");
     setTimeout(() => inputRef.current?.focus(), 0);
+  }
+  function handleUndo() {
+    if (!lastUndo) return;
+    lastUndo.undo();
+    setLog((l) => [{ ok: true, code: lastUndo.label, message: `Bipe de ${lastUndo.label} desfeito.` }, ...l].slice(0, 40));
+    setLastUndo(null);
   }
 
   return (
@@ -2906,10 +3048,13 @@ function ReceberEstoqueView({ scanReceiveStock, onBack }) {
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0" }}>Receber estoque</div>
       <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 14 }}>Bipe cada peça que chegou — cada leitura soma 1 unidade no estoque daquele tamanho/cor.</div>
-      <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
         <button type="submit" style={btnPrimary}>Confirmar</button>
       </form>
+      {lastUndo && (
+        <button onClick={handleUndo} style={{ ...btnGhostSmall, marginBottom: 16 }}><X size={13} /> Desfazer último bipe ({lastUndo.label})</button>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" }}>
         {log.map((l, i) => (
           l.alreadyReceived ? (
@@ -3014,6 +3159,7 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   const [code, setCode] = useState("");
   const [feedback, setFeedback] = useState(null);
   const [printing, setPrinting] = useState(false);
+  const [lastUndo, setLastUndo] = useState(null);
   const inputRef = useRef();
   useEffect(() => { inputRef.current?.focus(); }, [order.id]);
 
@@ -3022,11 +3168,19 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
   function handleSubmit(e) {
     e.preventDefault();
     if (!code.trim()) return;
-    setFeedback(scanCollectOrder(order, code.trim()));
+    const result = scanCollectOrder(order, code.trim());
+    setFeedback(result);
+    setLastUndo(result.ok && result.undo ? { undo: result.undo, label: code.trim() } : null);
     setCode("");
     // Um pequeno atraso garante que o campo já esteja liberado de novo pro
     // próximo bip, mesmo logo depois de uma mensagem de erro aparecer.
     setTimeout(() => inputRef.current?.focus(), 0);
+  }
+  function handleUndo() {
+    if (!lastUndo) return;
+    lastUndo.undo();
+    setFeedback({ ok: true, message: `Bipe de ${lastUndo.label} desfeito.` });
+    setLastUndo(null);
   }
 
   function confirm() {
@@ -3066,6 +3220,9 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
         <input ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Bipe o código aqui" style={{ ...inputStyle, flex: 1 }} autoFocus />
         <button type="submit" style={btnPrimary}>OK</button>
       </form>
+      {lastUndo && (
+        <button onClick={handleUndo} style={{ ...btnGhostSmall, marginBottom: 10 }}><X size={13} /> Desfazer último bipe ({lastUndo.label})</button>
+      )}
       {feedback && (
         feedback.alreadyComplete ? (
           <div style={{ padding: "12px 14px", borderRadius: 4, marginBottom: 14, fontSize: 16, fontWeight: 700, background: "#FCEBEB", color: "#791F1F", border: "1px solid #F09595" }}>
@@ -3256,15 +3413,9 @@ function LancarCorteView({ products, categories, lancarCorte, persistProducts, o
               <label style={labelStyle}>Descrição</label>
               <input value={description} onChange={(e) => setDescription(e.target.value)} style={inputStyle} />
             </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>Preço de venda</label>
-                <input value={price} onChange={(e) => setPrice(e.target.value)} style={inputStyle} placeholder="0,00" />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>Preço de custo</label>
-                <input value={costPrice} onChange={(e) => setCostPrice(e.target.value)} style={inputStyle} placeholder="0,00" />
-              </div>
+            <div>
+              <label style={labelStyle}>Preço de venda</label>
+              <input value={price} onChange={(e) => setPrice(e.target.value)} style={inputStyle} placeholder="0,00" />
             </div>
           </>
         )}
