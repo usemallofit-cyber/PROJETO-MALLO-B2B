@@ -995,6 +995,38 @@ function rowToStockItem(r) {
     await persistCutBatches(cutBatches.map((b) => b.id === batchId ? { ...b, status: "rejeitado", approvedBy: session.name || session.username, approvedAt: new Date().toISOString() } : b));
   }
 
+  // Exclui um corte lançado (pendente, aprovado ou recusado). Se já tinha
+  // sido aprovado, desfaz os efeitos: tira a quantidade de "em produção" e
+  // apaga as peças numeradas que nasceram dele — mas só se nenhuma delas já
+  // tiver sido recebida ou vendida, pra nunca apagar peça real por engano.
+  async function excluirCorte(batchId) {
+    const batch = cutBatches.find((b) => b.id === batchId);
+    if (!batch) return { ok: false, message: "Corte não encontrado." };
+
+    if (batch.status === "aprovado") {
+      const ligadas = stockItems.filter((si) => si.cutBatchId === batchId);
+      const jaMexidas = ligadas.filter((si) => si.confirmed || si.orderId);
+      if (jaMexidas.length) {
+        return { ok: false, message: `Não é possível excluir: ${jaMexidas.length} peça(s) desse corte já foram recebidas ou vendidas.` };
+      }
+      const product = products.find((p) => p.id === batch.productId);
+      if (product) {
+        const nextProducts = products.map((p) => p.id !== batch.productId ? p : {
+          ...p,
+          variants: p.variants.map((v) => v.id !== batch.variantId ? v : {
+            ...v,
+            stockProducao: { ...(v.stockProducao || {}), [batch.size]: Math.max(0, (v.stockProducao?.[batch.size] || 0) - batch.qty) },
+          }),
+        });
+        await persistProducts(nextProducts);
+      }
+      if (ligadas.length) await persistStockItems(stockItems.filter((si) => si.cutBatchId !== batchId));
+    }
+
+    await persistCutBatches(cutBatches.filter((b) => b.id !== batchId));
+    return { ok: true };
+  }
+
   // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
   // (cancelamento), sign=-1 abate de novo (pedido reativado a partir de
   // "Pedido cancelado"). Pedidos criados antes desta atualização não têm
@@ -1383,7 +1415,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCorte={excluirCorte} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -2048,7 +2080,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCorte }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -2977,7 +3009,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -2988,7 +3020,7 @@ function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
   if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} persistProducts={persistProducts} onBack={() => setMode("menu")} />;
-  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} stockItems={stockItems} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
+  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} stockItems={stockItems} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCorte={excluirCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
     <div>
@@ -3534,7 +3566,7 @@ function CorteLancadoConfirmacao({ lastBatches, onNovoLancamento, onBack }) {
 }
 
 
-function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarCorte, canApprove, onBack }) {
+function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarCorte, excluirCorte, canApprove, onBack }) {
   const sorted = cutBatches.slice().sort((a, b) => new Date(b.cutAt) - new Date(a.cutAt));
   const pendentes = sorted.filter((b) => b.status === "pendente");
   const outros = sorted.filter((b) => b.status !== "pendente");
@@ -3598,13 +3630,33 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
     downloadEplFile(buildEplLabels(entriesFor(selecionados)), `etiquetas-selecionadas-${new Date().toISOString().slice(0, 10)}.epl`);
   }
 
+  const [markedDelete, setMarkedDelete] = useState({});
+  const [deleting, setDeleting] = useState(false);
+  function toggleDelete(id) { setMarkedDelete((s) => ({ ...s, [id]: !s[id] })); }
+  const marcadosParaExcluir = sorted.filter((b) => markedDelete[b.id]);
+
+  async function handleExcluirSelecionados() {
+    if (!marcadosParaExcluir.length) return;
+    if (!confirm(`Excluir ${marcadosParaExcluir.length} corte(s) lançado(s)? Essa ação não pode ser desfeita.`)) return;
+    setDeleting(true);
+    const erros = [];
+    for (const b of marcadosParaExcluir) {
+      const res = await excluirCorte(b.id);
+      if (!res.ok) erros.push(`${b.model} · ${b.color} · ${b.size}: ${res.message}`);
+    }
+    setDeleting(false);
+    setMarkedDelete({});
+    if (erros.length) alert("Alguns cortes não puderam ser excluídos:\n\n" + erros.join("\n"));
+  }
+
   function Row({ b }) {
     const statusColor = b.status === "aprovado" ? { bg: "#EAF3DE", fg: "#27500A" } : b.status === "rejeitado" ? { bg: "#FCEBEB", fg: "#791F1F" } : { bg: "#FAEEDA", fg: "#633806" };
     return (
       <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div style={{ display: "flex", gap: 10 }}>
-            {b.status === "aprovado" && <input type="checkbox" checked={!!selected[b.id]} onChange={() => toggleSelect(b.id)} style={{ marginTop: 3 }} />}
+            <input type="checkbox" checked={!!markedDelete[b.id]} title="Marcar para exclusão" onChange={() => toggleDelete(b.id)} style={{ marginTop: 3 }} />
+            {b.status === "aprovado" && <input type="checkbox" checked={!!selected[b.id]} title="Marcar para imprimir" onChange={() => toggleSelect(b.id)} style={{ marginTop: 3 }} />}
             <div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{b.model} · {b.color} · {b.size} — {b.qty} peça(s)</div>
               <div style={{ fontSize: 11.5, color: TOKENS.graphite, marginTop: 2 }}>Lançado por {b.cutBy} · {new Date(b.cutAt).toLocaleString("pt-BR")}</div>
@@ -3632,7 +3684,14 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
   return (
     <div>
       <button onClick={onBack} style={btnGhostSmall}><ChevronLeft size={13} /> Voltar</button>
-      <div style={{ fontFamily: "Georgia, serif", fontSize: 20, margin: "12px 0 18px" }}>Cortes lançados</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 18px", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 20 }}>Cortes lançados</div>
+        {marcadosParaExcluir.length > 0 && (
+          <button onClick={handleExcluirSelecionados} disabled={deleting} style={{ ...btnGhostSmall, color: "#A5453F", borderColor: "#A5453F" }}>
+            <Trash2 size={13} /> {deleting ? "Excluindo..." : `Excluir selecionado(s) (${marcadosParaExcluir.length})`}
+          </button>
+        )}
+      </div>
       <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Pendentes ({pendentes.length})</div>
       {pendentes.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 18 }}>Nenhum corte pendente.</div>}
       {pendentes.map((b) => <Row key={b.id} b={b} />)}
