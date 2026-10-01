@@ -583,7 +583,7 @@ async function buildOrderPdfBlob(items, session, showPrice, client, note) {
     doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(23, 22, 26);
     doc.text(c.model, marginX + 58 + qtyWidth + 5, y + 16);
     doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(90, 86, 76);
-    doc.text(`Cor: ${c.color}  ·  Tam: ${c.size}`, marginX + 58, y + 32);
+    doc.text(`Cor: ${c.color}  ·  Tam: ${c.size}${c.sku ? `  ·  SKU: ${c.sku}` : ""}`, marginX + 58, y + 32);
     if (showPrice) {
       doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(140, 58, 58);
       doc.text(`R$ ${formatBRL(parseBRL(c.price) * c.qty)}`, marginX + 58, y + 50);
@@ -1116,14 +1116,31 @@ function rowToStockItem(r) {
   // que está sendo separado e soma na contagem daquele item, sem mexer no
   // estoque de novo (o abate já aconteceu quando o pedido foi finalizado).
   function scanCollectOrder(order, code) {
+    const raw = (code || "").trim().toUpperCase();
+    // Se o código bipado é de uma peça individual rastreada, confere se ela
+    // já passou por "Receber estoque" — uma etiqueta impressa de uma peça
+    // ainda em produção não pode ser aceita aqui como se já estivesse pronta.
+    const dotMatch = raw.match(/^(.+)\.(\d+)$/);
+    let specificItem = null;
+    if (dotMatch) {
+      specificItem = stockItems.find((si) => `${(si.sku || "").toUpperCase()}.${si.seq}` === raw);
+      if (specificItem && specificItem.confirmed === false) {
+        return { ok: false, message: `${raw} ainda está em produção — confirme em "Receber estoque" antes de coletar.` };
+      }
+    }
     const match = matchScannedCode(code, products, stockItems);
     if (!match) return { ok: false, message: "Código não reconhecido." };
     const idx = order.items.findIndex((it) => it.productId === match.productId && it.variantId === match.variantId && it.size === match.size);
     if (idx === -1) return { ok: false, message: "Essa peça não faz parte deste pedido." };
     const item = order.items[idx];
     const collected = item.collected || 0;
+    const collectedIds = item.collectedIds || [];
+    // Mesma peça física bipada duas vezes nunca deve contar duas vezes.
+    if (specificItem && collectedIds.includes(specificItem.id)) {
+      return { ok: false, duplicatePiece: true, message: `${raw} já foi coletada neste pedido. Não foi contada de novo.` };
+    }
     if (collected >= item.qty) return { ok: false, alreadyComplete: true, message: `"${item.model}" (${item.color}, ${item.size}) já está completo.` };
-    const nextItems = order.items.map((it, i) => i === idx ? { ...it, collected: collected + 1 } : it);
+    const nextItems = order.items.map((it, i) => i === idx ? { ...it, collected: collected + 1, collectedIds: specificItem ? [...(it.collectedIds || []), specificItem.id] : it.collectedIds } : it);
     persistOrders(orders.map((o) => o.id === order.id ? { ...o, items: nextItems } : o));
     return { ok: true, message: `${item.model} · ${item.color} · ${item.size} — ${collected + 1} de ${item.qty}` };
   }
@@ -2979,7 +2996,7 @@ function PedidoColetadoDetalhe({ order, onBack }) {
             {it.image ? <img src={it.image} style={{ width: 40, height: 52, objectFit: "cover", borderRadius: 3, flexShrink: 0 }} /> : <div style={{ width: 40, height: 52, background: TOKENS.ivorySoft, borderRadius: 3, flexShrink: 0 }} />}
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{it.model} · {it.color} · {it.size}</div>
-              <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{it.qty} peça(s) · R$ {formatBRL(parseBRL(it.price) * it.qty)}</div>
+              <div style={{ fontSize: 11.5, color: TOKENS.graphite }}>{it.qty} peça(s) · R$ {formatBRL(parseBRL(it.price) * it.qty)}{it.sku ? ` · SKU ${it.sku}` : ""}</div>
             </div>
           </div>
         ))}
@@ -3053,6 +3070,10 @@ function ColetarPedidoView({ order: initialOrder, orders, scanCollectOrder, upda
         feedback.alreadyComplete ? (
           <div style={{ padding: "12px 14px", borderRadius: 4, marginBottom: 14, fontSize: 16, fontWeight: 700, background: "#FCEBEB", color: "#791F1F", border: "1px solid #F09595" }}>
             ATENÇÃO. Já foi completo essa referência.
+          </div>
+        ) : feedback.duplicatePiece ? (
+          <div style={{ padding: "12px 14px", borderRadius: 4, marginBottom: 14, fontSize: 16, fontWeight: 700, background: "#FCEBEB", color: "#791F1F", border: "1px solid #F09595" }}>
+            ATENÇÃO. {feedback.message}
           </div>
         ) : (
           <div style={{ padding: "8px 12px", borderRadius: 4, marginBottom: 14, fontSize: 12.5, background: feedback.ok ? "#EAF3DE" : "#FCEBEB", color: feedback.ok ? "#27500A" : "#791F1F" }}>{feedback.message}</div>
