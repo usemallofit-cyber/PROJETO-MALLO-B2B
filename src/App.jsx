@@ -999,32 +999,63 @@ function rowToStockItem(r) {
   // sido aprovado, desfaz os efeitos: tira a quantidade de "em produção" e
   // apaga as peças numeradas que nasceram dele — mas só se nenhuma delas já
   // tiver sido recebida ou vendida, pra nunca apagar peça real por engano.
-  async function excluirCorte(batchId) {
-    const batch = cutBatches.find((b) => b.id === batchId);
-    if (!batch) return { ok: false, message: "Corte não encontrado." };
+  // Exclui um ou vários cortes lançados DE UMA VEZ (mesmo cuidado que já
+  // tomamos em outros lugares: processar tudo junto, numa única gravação,
+  // evita a corrida de chamar isso várias vezes em sequência rápida e uma
+  // pisar na outra). Não apaga o registro do corte — só marca como
+  // "excluído" (continua aparecendo no histórico), zera a quantidade dele
+  // em produção, apaga as peças numeradas que ainda não foram recebidas
+  // (essas nunca existiram de verdade), e remove a cor do produto se ela
+  // ficar com zero peças em todo lugar. Peças já recebidas ou vendidas
+  // nunca são tocadas.
+  async function excluirCortes(batchIds) {
+    const idsSet = new Set(batchIds);
+    const alvos = cutBatches.filter((b) => idsSet.has(b.id) && b.status !== "excluído");
+    if (!alvos.length) return { ok: true, bloqueados: [] };
 
-    if (batch.status === "aprovado") {
-      const ligadas = stockItems.filter((si) => si.cutBatchId === batchId);
-      const jaMexidas = ligadas.filter((si) => si.confirmed || si.orderId);
-      if (jaMexidas.length) {
-        return { ok: false, message: `Não é possível excluir: ${jaMexidas.length} peça(s) desse corte já foram recebidas ou vendidas.` };
+    let nextProducts = products;
+    let nextStockItems = stockItems;
+    const bloqueados = [];
+
+    for (const batch of alvos) {
+      if (batch.status !== "aprovado") continue; // pendente/recusado não mexeu em estoque nenhum
+      const product = nextProducts.find((p) => p.id === batch.productId);
+      if (!product) continue;
+      const ligadas = nextStockItems.filter((si) => si.cutBatchId === batch.id);
+      const aindaNaoConfirmadas = ligadas.filter((si) => !si.confirmed);
+      const qtyRemover = ligadas.length ? aindaNaoConfirmadas.length : batch.qty; // cortes antigos sem peça rastreada usam o qty do lote
+
+      nextProducts = nextProducts.map((p) => p.id !== batch.productId ? p : {
+        ...p,
+        variants: p.variants.map((v) => v.id !== batch.variantId ? v : {
+          ...v,
+          stockProducao: { ...(v.stockProducao || {}), [batch.size]: Math.max(0, (v.stockProducao?.[batch.size] || 0) - qtyRemover) },
+        }),
+      });
+      if (aindaNaoConfirmadas.length) {
+        const removerIds = new Set(aindaNaoConfirmadas.map((si) => si.id));
+        nextStockItems = nextStockItems.filter((si) => !removerIds.has(si.id));
       }
-      const product = products.find((p) => p.id === batch.productId);
-      if (product) {
-        const nextProducts = products.map((p) => p.id !== batch.productId ? p : {
-          ...p,
-          variants: p.variants.map((v) => v.id !== batch.variantId ? v : {
-            ...v,
-            stockProducao: { ...(v.stockProducao || {}), [batch.size]: Math.max(0, (v.stockProducao?.[batch.size] || 0) - batch.qty) },
-          }),
-        });
-        await persistProducts(nextProducts);
-      }
-      if (ligadas.length) await persistStockItems(stockItems.filter((si) => si.cutBatchId !== batchId));
+      const jaMexidas = ligadas.length - aindaNaoConfirmadas.length;
+      if (jaMexidas > 0) bloqueados.push(`${batch.model} · ${batch.color} · ${batch.size}: ${jaMexidas} peça(s) já recebida(s)/vendida(s) continuam no estoque normalmente.`);
     }
 
-    await persistCutBatches(cutBatches.filter((b) => b.id !== batchId));
-    return { ok: true };
+    // Some com a cor da vitrine se ela ficou zerada em tudo (pronta +
+    // produção, todos os tamanhos).
+    nextProducts = nextProducts.map((p) => ({
+      ...p,
+      variants: p.variants.filter((v) => {
+        const totalPronta = SIZES.reduce((a, s) => a + (v.stock?.[s] || 0), 0);
+        const totalProducao = SIZES.reduce((a, s) => a + (v.stockProducao?.[s] || 0), 0);
+        return totalPronta > 0 || totalProducao > 0;
+      }),
+    }));
+
+    if (nextProducts !== products) await persistProducts(nextProducts);
+    if (nextStockItems !== stockItems) await persistStockItems(nextStockItems);
+    const now = new Date().toISOString();
+    await persistCutBatches(cutBatches.map((b) => idsSet.has(b.id) ? { ...b, status: "excluído", approvedBy: session.name || session.username, approvedAt: now } : b));
+    return { ok: true, bloqueados };
   }
 
   // Ajusta o estoque de uma leva de itens de pedido. sign=+1 devolve estoque
@@ -1415,7 +1446,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCorte={excluirCorte} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -2080,7 +2111,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCorte }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -2771,6 +2802,30 @@ function RelatoriosCorteAdmin({ cutBatches, products, orders, stockItems }) {
     return linhas.sort((a, b) => b.dias - a.dias);
   }, [orders, stockItems]);
 
+  // Do total "em produção" de cada cor/tamanho, tira o que já está reservado
+  // pra algum pedido esperando (pedidosEsperando) — o que sobra é o que
+  // ainda está disponível pra vender, sem dono ainda.
+  const producaoDisponivel = useMemo(() => {
+    const reservado = {};
+    pedidosEsperando.forEach((e) => {
+      const key = `${e.model}·${e.color}·${e.size}`;
+      reservado[key] = (reservado[key] || 0) + e.faltam;
+    });
+    const linhas = [];
+    products.forEach((p) => {
+      (p.variants || []).forEach((v) => {
+        SIZES.forEach((s) => {
+          const totalProducao = v.stockProducao?.[s] || 0;
+          if (!totalProducao) return;
+          const key = `${p.model}·${v.color}·${s}`;
+          const disponivel = totalProducao - (reservado[key] || 0);
+          if (disponivel > 0) linhas.push({ model: p.model, color: v.color, size: s, disponivel });
+        });
+      });
+    });
+    return linhas.sort((a, b) => b.disponivel - a.disponivel);
+  }, [products, pedidosEsperando]);
+
   // Lucro = preço de venda - preço de custo, por pedido, somado no período
   // filtrado (mesmo ano/mês do resto do relatório).
   const lucro = useMemo(() => {
@@ -2969,6 +3024,22 @@ function RelatoriosCorteAdmin({ cutBatches, products, orders, stockItems }) {
           </div>
         )}
       </div>
+
+      <div style={{ marginTop: 24 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 10 }}>Em produção, ainda sem comprador ({producaoDisponivel.length})</div>
+        {producaoDisponivel.length === 0 ? (
+          <div style={{ color: TOKENS.graphite, fontSize: 12.5 }}>Tudo que está em produção já tem pedido esperando, ou não há nada em produção agora.</div>
+        ) : (
+          <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+            {producaoDisponivel.map((e, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", fontSize: 12.5, borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+                <span>{e.model} · {e.color} · {e.size}</span>
+                <span style={{ fontWeight: 600, color: "#633806" }}>{e.disponivel} peça(s)</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3009,7 +3080,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
   );
 }
 
-function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCorte, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
+function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, scanReceiveStock, scanCollectOrder, updateStatus, session }) {
   const [mode, setMode] = useState("menu");
   const [activeOrder, setActiveOrder] = useState(null);
   const canApprove = session?.role === "admin" || session?.role === "admincentral";
@@ -3020,7 +3091,7 @@ function ColetaEstoqueAdmin({ orders, products, stockItems, settings, cutBatches
   if (mode === "coletar-pedido") return <ColetarPedidoView order={activeOrder} orders={orders} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} onBack={() => setMode("coletar-lista")} />;
   if (mode === "ver-pedido") return <PedidoColetadoDetalhe order={orders.find((o) => o.id === activeOrder?.id) || activeOrder} onBack={() => setMode("coletar-lista")} />;
   if (mode === "lancar-corte") return <LancarCorteView products={products} categories={settings.categories || DEFAULT_CATEGORIES} lancarCorte={lancarCorte} persistProducts={persistProducts} onBack={() => setMode("menu")} />;
-  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} stockItems={stockItems} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCorte={excluirCorte} canApprove={canApprove} onBack={() => setMode("menu")} />;
+  if (mode === "cortes") return <CortesAdmin cutBatches={cutBatches} products={products} stockItems={stockItems} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} canApprove={canApprove} onBack={() => setMode("menu")} />;
 
   return (
     <div>
@@ -3566,7 +3637,7 @@ function CorteLancadoConfirmacao({ lastBatches, onNovoLancamento, onBack }) {
 }
 
 
-function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarCorte, excluirCorte, canApprove, onBack }) {
+function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarCorte, excluirCortes, canApprove, onBack }) {
   const sorted = cutBatches.slice().sort((a, b) => new Date(b.cutAt) - new Date(a.cutAt));
   const pendentes = sorted.filter((b) => b.status === "pendente");
   const outros = sorted.filter((b) => b.status !== "pendente");
@@ -3637,25 +3708,24 @@ function CortesAdmin({ cutBatches, products, stockItems, aprovarCorte, rejeitarC
 
   async function handleExcluirSelecionados() {
     if (!marcadosParaExcluir.length) return;
-    if (!confirm(`Excluir ${marcadosParaExcluir.length} corte(s) lançado(s)? Essa ação não pode ser desfeita.`)) return;
+    if (!confirm(`Excluir ${marcadosParaExcluir.length} corte(s) lançado(s)? A quantidade em produção é removida da vitrine, mas o registro continua no histórico marcado como excluído.`)) return;
     setDeleting(true);
-    const erros = [];
-    for (const b of marcadosParaExcluir) {
-      const res = await excluirCorte(b.id);
-      if (!res.ok) erros.push(`${b.model} · ${b.color} · ${b.size}: ${res.message}`);
-    }
-    setDeleting(false);
-    setMarkedDelete({});
-    if (erros.length) alert("Alguns cortes não puderam ser excluídos:\n\n" + erros.join("\n"));
+    try {
+      const res = await excluirCortes(marcadosParaExcluir.map((b) => b.id));
+      setMarkedDelete({});
+      if (res.bloqueados?.length) alert("Alguns itens continuam no estoque normalmente, por já terem sido recebidos ou vendidos:\n\n" + res.bloqueados.join("\n"));
+    } catch (e) {
+      alert("Não foi possível excluir agora. Tente novamente em alguns segundos.");
+    } finally { setDeleting(false); }
   }
 
   function Row({ b }) {
-    const statusColor = b.status === "aprovado" ? { bg: "#EAF3DE", fg: "#27500A" } : b.status === "rejeitado" ? { bg: "#FCEBEB", fg: "#791F1F" } : { bg: "#FAEEDA", fg: "#633806" };
+    const statusColor = b.status === "aprovado" ? { bg: "#EAF3DE", fg: "#27500A" } : b.status === "rejeitado" ? { bg: "#FCEBEB", fg: "#791F1F" } : b.status === "excluído" ? { bg: "#EFEFEF", fg: "#5A564C" } : { bg: "#FAEEDA", fg: "#633806" };
     return (
-      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8, opacity: b.status === "excluído" ? 0.6 : 1 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div style={{ display: "flex", gap: 10 }}>
-            <input type="checkbox" checked={!!markedDelete[b.id]} title="Marcar para exclusão" onChange={() => toggleDelete(b.id)} style={{ marginTop: 3 }} />
+            {b.status !== "excluído" && <input type="checkbox" checked={!!markedDelete[b.id]} title="Marcar para exclusão" onChange={() => toggleDelete(b.id)} style={{ marginTop: 3 }} />}
             {b.status === "aprovado" && <input type="checkbox" checked={!!selected[b.id]} title="Marcar para imprimir" onChange={() => toggleSelect(b.id)} style={{ marginTop: 3 }} />}
             <div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: TOKENS.ink }}>{b.model} · {b.color} · {b.size} — {b.qty} peça(s)</div>
