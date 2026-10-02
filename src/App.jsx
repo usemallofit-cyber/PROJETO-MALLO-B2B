@@ -15,7 +15,7 @@ const TOKENS = {
 };
 
 const SIZES = ["P", "M", "G", "GG"];
-const DEFAULT_CATEGORIES = ["Conjunto de Short", "Conjunto de Calça", "Macaquinhos", "KIT's"];
+const DEFAULT_CATEGORIES = ["CONJUNTO DE SHORT", "CONJUNTO DE CALÇA", "MACAQUINHOS", "KIT'S"];
 
 // Se o produto não tem SKU cadastrado, usa as iniciais do nome do modelo em
 // vez do nome inteiro — evita código de barras enorme (ex.: "Conjunto Short
@@ -3137,7 +3137,7 @@ function CatalogoModelosAdmin({ settings, setSettings, products, setProducts, cu
       <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Modelos</div>
       <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Categorias usadas ao cadastrar produtos e lançar cortes. Crie uma nova se precisar.</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-        <input value={novaCategoria} onChange={(e) => setNovaCategoria(e.target.value)} placeholder="Nova categoria" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCategoria()} />
+        <input value={novaCategoria} onChange={(e) => setNovaCategoria(e.target.value.toUpperCase())} placeholder="Nova categoria" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCategoria()} />
         <button onClick={addCategoria} style={btnPrimary}><Plus size={14} /> Adicionar</button>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", marginBottom: 28 }}>
