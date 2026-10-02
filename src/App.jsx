@@ -316,11 +316,15 @@ function downloadXLSX(XLSX, rows, sheetName, filename) {
 const LABEL_W = 33, LABEL_H = 21, LABEL_GAP = 0.2, LABEL_COLS = 3, LABEL_MARGIN_X = 8, LABEL_MARGIN_Y = 8;
 
 function drawLabel(doc, x, y, model, color, size, code, barcodeDataUrl) {
-  doc.setFont("helvetica", "bold"); doc.setFontSize(6); doc.setTextColor(23, 22, 26);
-  doc.text(model || "", x + 1.5, y + 3.2, { maxWidth: LABEL_W - 3 });
-  doc.setFont("helvetica", "normal"); doc.setFontSize(5.3); doc.setTextColor(90, 86, 76);
-  doc.text(`${color || ""} · ${size}`, x + 1.5, y + 6.3);
-  doc.addImage(barcodeDataUrl, "PNG", x + 1.5, y + 7.8, LABEL_W - 3, 7.5);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(5.5); doc.setTextColor(23, 22, 26);
+  doc.text(model || "", x + 1.5, y + 2.6, { maxWidth: LABEL_W - 3 });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(4.6); doc.setTextColor(90, 86, 76);
+  doc.text(color || "", x + 1.5, y + 5);
+  // Tamanho da peça (P/M/G/GG) bem maior — é o que mais importa bater o olho.
+  doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(23, 22, 26);
+  doc.text(size || "", x + LABEL_W / 2, y + 10.5, { align: "center" });
+  // Código de barras centralizado de verdade no meio da etiqueta.
+  doc.addImage(barcodeDataUrl, "PNG", x + 1.5, y + 12.5, LABEL_W - 3, 5.8);
   doc.setFont("helvetica", "normal"); doc.setFontSize(4.4); doc.setTextColor(23, 22, 26);
   doc.text(code, x + LABEL_W / 2, y + LABEL_H - 1.3, { align: "center" });
 }
@@ -348,6 +352,16 @@ function downloadCsvFile(text, filename) {
 
 // "gapDots" é a distância entre etiquetas na bobina — ajuste se a etiqueta
 // sair descolocada (cada etiqueta física normalmente tem uns 2-3mm de vão).
+// Estimativa de largura (em pontos/dots) que um código CODE128 vai ocupar
+// impresso, pra poder centralizar de verdade — a impressora não deixa a
+// gente perguntar a largura final, então calculamos pela regra do próprio
+// CODE128: ~11 módulos por caractere + início/checksum/fim, vezes a
+// largura da barra mais estreita (narrowBar).
+function estimateBarcodeWidthDots(code, narrowBar) {
+  const modules = 11 * (String(code || "").length + 2) + 13;
+  return modules * narrowBar;
+}
+
 function buildEplLabels(entries, gapDots = 24) {
   const DPMM = 8; // 203dpi = 8 pontos por mm
   const LABEL_W = Math.round(33 * DPMM); // 264
@@ -356,6 +370,8 @@ function buildEplLabels(entries, gapDots = 24) {
   const ROWS_PER_BATCH = 6; // quantas fileiras viram "uma etiqueta só" por vez
   const margin = 20; // mesma margem do teste que já imprimiu certinho
   const rowWidth = LABEL_W * COLS + gapDots * (COLS - 1);
+  const narrowBar = 1;
+  const barHeight = 35;
 
   // Agrupa as fileiras em lotes e trata cada lote como UMA ÚNICA etiqueta
   // "alta" (várias fileiras reais empilhadas, com o espaço em branco exato
@@ -374,14 +390,21 @@ function buildEplLabels(entries, gapDots = 24) {
     batchRows.forEach((rowEntries, r) => {
       const yBase = r * (LABEL_H + gapDots);
       rowEntries.forEach((e, col) => {
-        const x = col * (LABEL_W + gapDots) + margin;
+        const xBase = col * (LABEL_W + gapDots) + margin;
         const code = (e.code || "").replace(/["\\]/g, "").toUpperCase();
         const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24).toUpperCase();
-        const colorSize = `${(e.color || "").replace(/["\\]/g, "")} - ${e.size || ""}`.toUpperCase();
-        out += `A${x},${yBase + 8},0,2,1,1,N,"${model}"\n`;
-        out += `A${x},${yBase + 32},0,2,1,1,N,"${colorSize}"\n`;
-        out += `B${x},${yBase + 54},0,1B,1,1,35,N,"${code}"\n`;
-        out += `A${x},${yBase + 98},0,2,1,1,N,"${code}"\n`;
+        const color = (e.color || "").replace(/["\\]/g, "").toUpperCase();
+        const size = (e.size || "").replace(/["\\]/g, "").toUpperCase();
+        // Barra centralizada de verdade dentro da etiqueta, calculando a
+        // largura real que ela vai sair impressa.
+        const barW = estimateBarcodeWidthDots(code, narrowBar);
+        const barX = Math.max(xBase, xBase + Math.round((LABEL_W - barW) / 2));
+        out += `A${xBase},${yBase + 4},0,1,1,1,N,"${model}"\n`;
+        out += `A${xBase},${yBase + 18},0,1,1,1,N,"${color}"\n`;
+        // Tamanho da peça (P/M/G/GG) 3x maior que antes — é o que mais importa bater o olho.
+        out += `A${xBase},${yBase + 34},0,1,3,3,N,"${size}"\n`;
+        out += `B${barX},${yBase + 78},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
+        out += `A${xBase},${yBase + 120},0,2,1,1,N,"${code}"\n`;
       });
     });
     out += `P1\n`;
