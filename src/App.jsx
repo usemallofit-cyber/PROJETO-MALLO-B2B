@@ -872,9 +872,9 @@ export default function App() {
   // vez (lançar corte ou cadastro direto), ela já aparece pronta pra
   // escolher, sem digitar o nome nem escolher o tom de novo.
   async function garantirCorNoCatalogo(name, hex) {
-    const nomeLimpo = (name || "").trim();
+    const nomeLimpo = (name || "").trim().toUpperCase();
     if (!nomeLimpo) return;
-    const existe = (settings.colors || []).some((c) => c.name.toLowerCase() === nomeLimpo.toLowerCase());
+    const existe = (settings.colors || []).some((c) => c.name.toUpperCase() === nomeLimpo);
     if (existe) return;
     await persistSettings({ ...settings, colors: [...(settings.colors || []), { name: nomeLimpo, hex }] });
   }
@@ -3106,7 +3106,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
       <div style={{ fontFamily: "Georgia, serif", fontSize: 18, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Cores</div>
       <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Cores reutilizáveis ao lançar corte ou cadastrar produto direto — assim não precisa digitar o nome nem escolher o tom de novo. Cores novas digitadas em qualquer uma das duas telas já entram aqui sozinhas.</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 18, alignItems: "center" }}>
-        <input value={novaCorNome} onChange={(e) => setNovaCorNome(e.target.value)} placeholder="Nova cor" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCor()} />
+        <input value={novaCorNome} onChange={(e) => setNovaCorNome(e.target.value.toUpperCase())} placeholder="Nova cor" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCor()} />
         <input type="color" value={novaCorHex} onChange={(e) => setNovaCorHex(e.target.value)} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%", flexShrink: 0 }} />
         <button onClick={addCor} style={btnPrimary}><Plus size={14} /> Adicionar</button>
       </div>
@@ -3655,7 +3655,7 @@ function LancarCorteView({ products, categories, colors, garantirCorNoCatalogo, 
                   <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 8 }}>
                     <div style={{ flex: 1 }}>
                       <label style={labelStyle}>Nome da cor nova</label>
-                      <input value={en.colorName} onChange={(e) => updateEntry(en.key, { colorName: e.target.value })} style={inputStyle} placeholder="Ex: Vinho" />
+                      <input value={en.colorName} onChange={(e) => updateEntry(en.key, { colorName: e.target.value.toUpperCase() })} style={inputStyle} placeholder="Ex: VINHO" />
                     </div>
                     <input type="color" value={en.hex} onChange={(e) => updateEntry(en.key, { hex: e.target.value })} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
                   </div>
@@ -4366,7 +4366,7 @@ function VariantEditor({ v, colors, onChange, onRemove, onAddImages, onRemoveIma
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
           <input type="color" value={v.hex} onChange={(e) => onChange({ hex: e.target.value })} style={{ width: 34, height: 34, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
-          <input value={v.color} onChange={(e) => onChange({ color: e.target.value })} placeholder="Nome da cor (ex: Vermelho)" style={{ ...inputStyle, maxWidth: 220 }} />
+          <input value={v.color} onChange={(e) => onChange({ color: e.target.value.toUpperCase() })} placeholder="Nome da cor (ex: VERMELHO)" style={{ ...inputStyle, maxWidth: 220 }} />
           {colors?.length > 0 && (
             <div style={{ width: 200 }}>
               <ColorSelect value="" options={[{ value: "", label: "Usar cor já cadastrada...", hex: null }, ...colors.map((c) => ({ value: c.name, label: c.name, hex: c.hex }))]}
