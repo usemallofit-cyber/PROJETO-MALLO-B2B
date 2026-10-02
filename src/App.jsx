@@ -3074,6 +3074,36 @@ function CatalogoModelosAdmin({ settings, setSettings, products, setProducts, cu
     setSettings({ ...settings, categories: categories.filter((c) => c !== nome) });
   }
 
+  const [editingCategoria, setEditingCategoria] = useState(null);
+  const [editCategoriaNome, setEditCategoriaNome] = useState("");
+  const [salvandoCategoria, setSalvandoCategoria] = useState(false);
+
+  function startEditCategoria(nome) {
+    setEditingCategoria(nome);
+    setEditCategoriaNome(nome);
+  }
+
+  // Edita o nome da categoria e já atualiza em todo produto que já usa ela,
+  // mesmo tratamento que demos pras cores.
+  async function saveEditCategoria() {
+    const nomeOriginal = editingCategoria;
+    const novoNome = editCategoriaNome.trim().toUpperCase();
+    if (!novoNome) { alert("O nome da categoria não pode ficar vazio."); return; }
+    if (novoNome !== nomeOriginal.toUpperCase() && categories.some((c) => c.toUpperCase() === novoNome)) {
+      alert("Já existe uma categoria com esse nome.");
+      return;
+    }
+    setSalvandoCategoria(true);
+    try {
+      await setSettings({ ...settings, categories: categories.map((c) => c === nomeOriginal ? novoNome : c) });
+      const afetados = products.filter((p) => p.category === nomeOriginal);
+      if (afetados.length) {
+        await setProducts(products.map((p) => p.category === nomeOriginal ? { ...p, category: novoNome } : p));
+      }
+      setEditingCategoria(null);
+    } finally { setSalvandoCategoria(false); }
+  }
+
   function addCor() {
     const nome = novaCorNome.trim();
     if (!nome) return;
@@ -3142,9 +3172,21 @@ function CatalogoModelosAdmin({ settings, setSettings, products, setProducts, cu
       </div>
       <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", marginBottom: 28 }}>
         {categories.map((c) => (
-          <div key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
-            <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c}</span>
-            <button onClick={() => removeCategoria(c)} style={iconBtnStyle}><Trash2 size={15} color="#A5453F" /></button>
+          <div key={c} style={{ borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px" }}>
+              <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c}</span>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => startEditCategoria(c)} style={iconBtnStyle}><Pencil size={14} color={TOKENS.graphite} /></button>
+                <button onClick={() => removeCategoria(c)} style={iconBtnStyle}><Trash2 size={15} color="#A5453F" /></button>
+              </div>
+            </div>
+            {editingCategoria === c && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "0 14px 12px" }}>
+                <input value={editCategoriaNome} onChange={(e) => setEditCategoriaNome(e.target.value.toUpperCase())} style={{ ...inputStyle, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && saveEditCategoria()} />
+                <button onClick={saveEditCategoria} disabled={salvandoCategoria} style={{ ...btnPrimary, padding: "6px 12px", fontSize: 12 }}><Check size={13} /> {salvandoCategoria ? "Salvando..." : "Salvar"}</button>
+                <button onClick={() => setEditingCategoria(null)} style={btnGhostSmall}>Cancelar</button>
+              </div>
+            )}
           </div>
         ))}
       </div>
