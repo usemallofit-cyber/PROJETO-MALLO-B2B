@@ -1457,7 +1457,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} persistCutBatches={persistCutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -2122,7 +2122,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, persistCutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -2157,7 +2157,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       {tab === "itens" && <ItemListAdmin stockItems={stockItems} setStockItems={setStockItems} orders={orders} products={products} setProducts={setProducts} />}
       {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} orders={orders} stockItems={stockItems} />}
-      {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} />}
+      {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} products={products} setProducts={setProducts} cutBatches={cutBatches} persistCutBatches={persistCutBatches} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
@@ -3055,7 +3055,7 @@ function RelatoriosCorteAdmin({ cutBatches, products, orders, stockItems }) {
   );
 }
 
-function CatalogoModelosAdmin({ settings, setSettings }) {
+function CatalogoModelosAdmin({ settings, setSettings, products, setProducts, cutBatches, persistCutBatches, stockItems, setStockItems }) {
   const categories = settings.categories || DEFAULT_CATEGORIES;
   const [novaCategoria, setNovaCategoria] = useState("");
   const colors = settings.colors || [];
@@ -3086,6 +3086,52 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
     setSettings({ ...settings, colors: colors.filter((c) => c.name !== nome) });
   }
 
+  const [editingCor, setEditingCor] = useState(null); // nome da cor sendo editada
+  const [editNome, setEditNome] = useState("");
+  const [editHex, setEditHex] = useState("#7A2E38");
+  const [salvandoEdicao, setSalvandoEdicao] = useState(false);
+
+  function startEditCor(c) {
+    setEditingCor(c.name);
+    setEditNome(c.name);
+    setEditHex(c.hex);
+  }
+
+  // Edita a cor no catálogo E já atualiza em todo lugar que já usa ela
+  // (produtos, cortes lançados, peças numeradas) — assim o ajuste de tom ou
+  // nome vale pra tudo de uma vez, não só pras próximas escolhas.
+  async function saveEditCor() {
+    const nomeOriginal = editingCor;
+    const novoNome = editNome.trim().toUpperCase();
+    if (!novoNome) { alert("O nome da cor não pode ficar vazio."); return; }
+    if (novoNome !== nomeOriginal.toUpperCase() && colors.some((c) => c.name.toUpperCase() === novoNome)) {
+      alert("Já existe uma cor com esse nome no catálogo.");
+      return;
+    }
+    setSalvandoEdicao(true);
+    try {
+      await setSettings({ ...settings, colors: colors.map((c) => c.name === nomeOriginal ? { name: novoNome, hex: editHex } : c) });
+
+      const nextProducts = products.map((p) => ({
+        ...p,
+        variants: p.variants.map((v) => v.color?.toUpperCase() === nomeOriginal.toUpperCase() ? { ...v, color: novoNome, hex: editHex } : v),
+      }));
+      await setProducts(nextProducts);
+
+      const batchesAfetados = cutBatches.filter((b) => b.color?.toUpperCase() === nomeOriginal.toUpperCase());
+      if (batchesAfetados.length) {
+        await persistCutBatches(cutBatches.map((b) => b.color?.toUpperCase() === nomeOriginal.toUpperCase() ? { ...b, color: novoNome } : b));
+      }
+
+      const itensAfetados = stockItems.filter((si) => si.color?.toUpperCase() === nomeOriginal.toUpperCase());
+      if (itensAfetados.length) {
+        await setStockItems(stockItems.map((si) => si.color?.toUpperCase() === nomeOriginal.toUpperCase() ? { ...si, color: novoNome, hex: editHex } : si));
+      }
+
+      setEditingCor(null);
+    } finally { setSalvandoEdicao(false); }
+  }
+
   return (
     <div style={{ maxWidth: 460 }}>
       <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Modelos</div>
@@ -3104,7 +3150,7 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
       </div>
 
       <div style={{ fontFamily: "Georgia, serif", fontSize: 18, color: TOKENS.ink, marginBottom: 4 }}>Catálogo de Cores</div>
-      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Cores reutilizáveis ao lançar corte ou cadastrar produto direto — assim não precisa digitar o nome nem escolher o tom de novo. Cores novas digitadas em qualquer uma das duas telas já entram aqui sozinhas.</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Cores reutilizáveis ao lançar corte ou cadastrar produto direto — assim não precisa digitar o nome nem escolher o tom de novo. Cores novas digitadas em qualquer uma das duas telas já entram aqui sozinhas. Editar uma cor aqui já atualiza o nome/tom em todos os produtos, cortes e peças que já usam ela.</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 18, alignItems: "center" }}>
         <input value={novaCorNome} onChange={(e) => setNovaCorNome(e.target.value.toUpperCase())} placeholder="Nova cor" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addCor()} />
         <input type="color" value={novaCorHex} onChange={(e) => setNovaCorHex(e.target.value)} style={{ width: 40, height: 40, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%", flexShrink: 0 }} />
@@ -3113,12 +3159,25 @@ function CatalogoModelosAdmin({ settings, setSettings }) {
       <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
         {colors.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: TOKENS.graphite }}>Nenhuma cor cadastrada ainda.</div>}
         {colors.map((c) => (
-          <div key={c.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ width: 18, height: 18, borderRadius: "50%", background: c.hex, border: `1px solid ${TOKENS.line}`, display: "inline-block" }} />
-              <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c.name}</span>
+          <div key={c.name} style={{ borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 18, height: 18, borderRadius: "50%", background: c.hex, border: `1px solid ${TOKENS.line}`, display: "inline-block" }} />
+                <span style={{ fontSize: 13.5, color: TOKENS.ink }}>{c.name}</span>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => startEditCor(c)} style={iconBtnStyle}><Pencil size={14} color={TOKENS.graphite} /></button>
+                <button onClick={() => removeCor(c.name)} style={iconBtnStyle}><Trash2 size={15} color="#A5453F" /></button>
+              </div>
             </div>
-            <button onClick={() => removeCor(c.name)} style={iconBtnStyle}><Trash2 size={15} color="#A5453F" /></button>
+            {editingCor === c.name && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "0 14px 12px" }}>
+                <input value={editNome} onChange={(e) => setEditNome(e.target.value.toUpperCase())} style={{ ...inputStyle, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && saveEditCor()} />
+                <input type="color" value={editHex} onChange={(e) => setEditHex(e.target.value)} style={{ width: 36, height: 36, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%", flexShrink: 0 }} />
+                <button onClick={saveEditCor} disabled={salvandoEdicao} style={{ ...btnPrimary, padding: "6px 12px", fontSize: 12 }}><Check size={13} /> {salvandoEdicao ? "Salvando..." : "Salvar"}</button>
+                <button onClick={() => setEditingCor(null)} style={btnGhostSmall}>Cancelar</button>
+              </div>
+            )}
           </div>
         ))}
       </div>
