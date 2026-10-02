@@ -316,15 +316,16 @@ function downloadXLSX(XLSX, rows, sheetName, filename) {
 const LABEL_W = 33, LABEL_H = 21, LABEL_GAP = 0.2, LABEL_COLS = 3, LABEL_MARGIN_X = 8, LABEL_MARGIN_Y = 8;
 
 function drawLabel(doc, x, y, model, color, size, code, barcodeDataUrl) {
-  doc.setFont("helvetica", "bold"); doc.setFontSize(5.5); doc.setTextColor(23, 22, 26);
-  doc.text(model || "", x + 1.5, y + 2.6, { maxWidth: LABEL_W - 3 });
+  // Nome do modelo: fonte um pouco maior e centralizado.
+  doc.setFont("helvetica", "bold"); doc.setFontSize(6.5); doc.setTextColor(23, 22, 26);
+  doc.text(model || "", x + LABEL_W / 2, y + 2.8, { maxWidth: LABEL_W - 2, align: "center" });
   doc.setFont("helvetica", "normal"); doc.setFontSize(4.6); doc.setTextColor(90, 86, 76);
-  doc.text(color || "", x + 1.5, y + 5);
-  // Tamanho da peça (P/M/G/GG) bem maior — é o que mais importa bater o olho.
+  doc.text(color || "", x + 1.5, y + 5.6);
+  // Tamanho da peça (P/M/G/GG), centralizado e um pouco mais pra baixo.
   doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(23, 22, 26);
-  doc.text(size || "", x + LABEL_W / 2, y + 10.5, { align: "center" });
+  doc.text(size || "", x + LABEL_W / 2, y + 11.3, { align: "center" });
   // Código de barras centralizado de verdade no meio da etiqueta.
-  doc.addImage(barcodeDataUrl, "PNG", x + 1.5, y + 12.5, LABEL_W - 3, 5.8);
+  doc.addImage(barcodeDataUrl, "PNG", x + 1.5, y + 13, LABEL_W - 3, 5.5);
   doc.setFont("helvetica", "normal"); doc.setFontSize(4.4); doc.setTextColor(23, 22, 26);
   doc.text(code, x + LABEL_W / 2, y + LABEL_H - 1.3, { align: "center" });
 }
@@ -360,6 +361,15 @@ function downloadCsvFile(text, filename) {
 function estimateBarcodeWidthDots(code, narrowBar) {
   const modules = 11 * (String(code || "").length + 2) + 13;
   return modules * narrowBar;
+}
+
+// Calcula o X pra centralizar um texto EPL dentro da largura da etiqueta —
+// o comando "A" do EPL não tem "centralizar" pronto, então estimamos a
+// largura pelo número de caracteres vezes a largura aproximada de cada um
+// (charW, que já vem multiplicada pelo multiplicador horizontal usado).
+function eplCenterX(xBase, labelW, text, charW) {
+  const w = charW * ((text || "").length || 1);
+  return Math.max(xBase, xBase + Math.round((labelW - w) / 2));
 }
 
 function buildEplLabels(entries, gapDots = 24) {
@@ -399,18 +409,18 @@ function buildEplLabels(entries, gapDots = 24) {
         // largura real que ela vai sair impressa.
         const barW = estimateBarcodeWidthDots(code, narrowBar);
         const barX = Math.max(xBase, xBase + Math.round((LABEL_W - barW) / 2));
-        out += `A${xBase},${yBase + 4},0,1,1,1,N,"${model}"\n`;
-        out += `A${xBase},${yBase + 18},0,1,1,1,N,"${color}"\n`;
-        // Tamanho da peça (P/M/G/GG) maior que o original, mas centralizado e
-        // um pouco menor que a tentativa anterior — a fonte 1 do EPL tem
-        // ~9 pontos de largura por caractere, multiplicamos pra estimar e
-        // calcular onde começar pra ficar centralizado de verdade.
+        // Nome do modelo: fonte um pouco maior (fonte 2 em vez de 1) e centralizado.
+        const nameX = eplCenterX(xBase, LABEL_W, model, 11);
+        out += `A${nameX},${yBase + 4},0,2,1,1,N,"${model}"\n`;
+        out += `A${xBase},${yBase + 20},0,1,1,1,N,"${color}"\n`;
+        // Tamanho da peça (P/M/G/GG), centralizado e um pouco mais pra baixo.
         const sizeMult = 2;
-        const sizeW = 9 * sizeMult * (size.length || 1);
-        const sizeX = Math.max(xBase, xBase + Math.round((LABEL_W - sizeW) / 2));
-        out += `A${sizeX},${yBase + 34},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
-        out += `B${barX},${yBase + 78},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
-        out += `A${xBase},${yBase + 120},0,2,1,1,N,"${code}"\n`;
+        const sizeX = eplCenterX(xBase, LABEL_W, size, 9 * sizeMult);
+        out += `A${sizeX},${yBase + 42},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
+        out += `B${barX},${yBase + 86},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
+        // Código embaixo, também centralizado (fonte 2, ~11pt por caractere).
+        const codeX = eplCenterX(xBase, LABEL_W, code, 11);
+        out += `A${codeX},${yBase + 128},0,2,1,1,N,"${code}"\n`;
       });
     });
     out += `P1\n`;
