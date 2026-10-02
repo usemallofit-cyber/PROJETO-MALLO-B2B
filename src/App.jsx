@@ -1779,10 +1779,10 @@ function ProductCard({ p, showPrice, addToCart, cart, commitCartChanges }) {
               <div style={{ fontSize: 10.5, color: TOKENS.graphite }}>Cor: <b style={{ color: TOKENS.ink }}>{variant.color || "—"}</b></div>
               {showPrice && <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.wine }}>R$ {p.price}</div>}
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {variants.map((v, i) => (
                 <button key={v.id} onClick={() => setVIdx(i)} title={v.color || "(sem nome)"} style={{
-                  width: 22, height: 22, borderRadius: "50%", background: v.hex, cursor: "pointer",
+                  width: 22, height: 22, minWidth: 22, borderRadius: "50%", background: v.hex, cursor: "pointer", flexShrink: 0,
                   border: i === vIdx ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}`,
                   boxShadow: i === vIdx ? "0 0 0 2px #fff inset" : "none", outline: "none",
                 }} />
@@ -4079,7 +4079,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
               <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                 {(p.variants || []).map((v) => (
                   <button key={v.id} title={v.color} onClick={() => setSelectedVariantByProduct((s) => ({ ...s, [p.id]: v.id }))} style={{
-                    width: 20, height: 20, borderRadius: "50%", background: v.hex, cursor: "pointer", padding: 0,
+                    width: 20, height: 20, minWidth: 20, borderRadius: "50%", background: v.hex, cursor: "pointer", padding: 0, flexShrink: 0,
                     border: activeVariant?.id === v.id ? `2px solid ${TOKENS.wine}` : `1px solid ${TOKENS.line}`,
                     boxShadow: activeVariant?.id === v.id ? "0 0 0 2px #fff inset" : "none",
                   }} />
