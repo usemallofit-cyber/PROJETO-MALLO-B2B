@@ -321,7 +321,7 @@ function drawLabel(doc, x, y, model, color, size, code, barcodeDataUrl) {
   doc.setFont("helvetica", "normal"); doc.setFontSize(4.6); doc.setTextColor(90, 86, 76);
   doc.text(color || "", x + 1.5, y + 5);
   // Tamanho da peça (P/M/G/GG) bem maior — é o que mais importa bater o olho.
-  doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(23, 22, 26);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(23, 22, 26);
   doc.text(size || "", x + LABEL_W / 2, y + 10.5, { align: "center" });
   // Código de barras centralizado de verdade no meio da etiqueta.
   doc.addImage(barcodeDataUrl, "PNG", x + 1.5, y + 12.5, LABEL_W - 3, 5.8);
@@ -401,8 +401,14 @@ function buildEplLabels(entries, gapDots = 24) {
         const barX = Math.max(xBase, xBase + Math.round((LABEL_W - barW) / 2));
         out += `A${xBase},${yBase + 4},0,1,1,1,N,"${model}"\n`;
         out += `A${xBase},${yBase + 18},0,1,1,1,N,"${color}"\n`;
-        // Tamanho da peça (P/M/G/GG) 3x maior que antes — é o que mais importa bater o olho.
-        out += `A${xBase},${yBase + 34},0,1,3,3,N,"${size}"\n`;
+        // Tamanho da peça (P/M/G/GG) maior que o original, mas centralizado e
+        // um pouco menor que a tentativa anterior — a fonte 1 do EPL tem
+        // ~9 pontos de largura por caractere, multiplicamos pra estimar e
+        // calcular onde começar pra ficar centralizado de verdade.
+        const sizeMult = 2;
+        const sizeW = 9 * sizeMult * (size.length || 1);
+        const sizeX = Math.max(xBase, xBase + Math.round((LABEL_W - sizeW) / 2));
+        out += `A${sizeX},${yBase + 34},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
         out += `B${barX},${yBase + 78},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
         out += `A${xBase},${yBase + 120},0,2,1,1,N,"${code}"\n`;
       });
