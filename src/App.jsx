@@ -4433,6 +4433,13 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
   function removeVariant(id) { setP((s) => ({ ...s, variants: s.variants.filter((v) => v.id !== id) })); }
   function updateVariant(id, patch) { setP((s) => ({ ...s, variants: s.variants.map((v) => v.id === id ? { ...v, ...patch } : v) })); }
   function setVariantStock(id, size, val) { setP((s) => ({ ...s, variants: s.variants.map((v) => v.id === id ? { ...v, stock: { ...v.stock, [size]: Math.max(0, Number(val) || 0) } } : v) })); }
+  // Kits são vendidos fechados, sempre na proporção 1 P / 2 M / 2 G / 1 GG.
+  // Em vez de digitar os 4 tamanhos, digita quantos kits e o estoque por
+  // tamanho é calculado sozinho.
+  function setVariantKitQty(id, val) {
+    const n = Math.max(0, Number(val) || 0);
+    setP((s) => ({ ...s, variants: s.variants.map((v) => v.id === id ? { ...v, stock: { P: n * 1, M: n * 2, G: n * 2, GG: n * 1 } } : v) }));
+  }
   async function addVariantImages(id, fileList, current) {
     const files = Array.from(fileList).slice(0, 4 - current.length);
     const dataUrls = await Promise.all(files.map((f) => fileToCompressedDataUrl(f)));
@@ -4480,12 +4487,13 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
           {p.variants.length === 0 && <div style={{ fontSize: 12, color: TOKENS.graphite, padding: 12, background: TOKENS.ivorySoft, borderRadius: 3 }}>Nenhuma cor adicionada. Cadastre pelo menos uma cor com suas fotos e estoque.</div>}
 
           {p.variants.map((v) => (
-            <VariantEditor key={v.id} v={v} colors={colors}
+            <VariantEditor key={v.id} v={v} colors={colors} category={p.category}
               onChange={(patch) => updateVariant(v.id, patch)}
               onRemove={() => removeVariant(v.id)}
               onAddImages={(files) => addVariantImages(v.id, files, v.images)}
               onRemoveImage={(idx) => removeVariantImage(v.id, idx, v.images)}
               onSetStock={(size, val) => setVariantStock(v.id, size, val)}
+              onSetKitQty={(val) => setVariantKitQty(v.id, val)}
             />
           ))}
         </div>
@@ -4498,8 +4506,12 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
   );
 }
 
-function VariantEditor({ v, colors, onChange, onRemove, onAddImages, onRemoveImage, onSetStock }) {
+function VariantEditor({ v, colors, category, onChange, onRemove, onAddImages, onRemoveImage, onSetStock, onSetKitQty }) {
   const fileRef = useRef();
+  const isKit = category === "KIT'S";
+  // Kit fechado: 1 P / 2 M / 2 G / 1 GG por unidade. Deduz quantos kits já
+  // tem a partir do estoque salvo (usa P, que é sempre 1x a quantidade).
+  const kitQty = v.stock.P || 0;
 
   return (
     <div style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, marginBottom: 12, background: TOKENS.ivorySoft }}>
@@ -4534,15 +4546,27 @@ function VariantEditor({ v, colors, onChange, onRemove, onAddImages, onRemoveIma
         <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => e.target.files.length && onAddImages(e.target.files)} />
       </div>
 
-      <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 1, color: TOKENS.graphite, marginBottom: 6 }}>Estoque por tamanho</div>
-      <div style={{ display: "flex", gap: 8 }}>
-        {SIZES.map((s) => (
-          <div key={s} style={{ flex: 1 }}>
-            <div style={{ fontSize: 10.5, textAlign: "center", color: TOKENS.graphite, marginBottom: 3 }}>{s}</div>
-            <input type="number" min={0} value={v.stock[s]} onChange={(e) => onSetStock(s, e.target.value)} style={{ ...inputStyle, textAlign: "center", padding: "7px 4px", background: "#fff" }} />
+      {isKit ? (
+        <>
+          <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 1, color: TOKENS.graphite, marginBottom: 6 }}>Quantidade de kits (1 P · 2 M · 2 G · 1 GG cada)</div>
+          <input type="number" min={0} value={kitQty} onChange={(e) => onSetKitQty(e.target.value)} style={{ ...inputStyle, maxWidth: 140, padding: "7px 10px", background: "#fff" }} />
+          <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 6 }}>
+            Estoque calculado: P {v.stock.P} · M {v.stock.M} · G {v.stock.G} · GG {v.stock.GG}
           </div>
-        ))}
-      </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 1, color: TOKENS.graphite, marginBottom: 6 }}>Estoque por tamanho</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {SIZES.map((s) => (
+              <div key={s} style={{ flex: 1 }}>
+                <div style={{ fontSize: 10.5, textAlign: "center", color: TOKENS.graphite, marginBottom: 3 }}>{s}</div>
+                <input type="number" min={0} value={v.stock[s]} onChange={(e) => onSetStock(s, e.target.value)} style={{ ...inputStyle, textAlign: "center", padding: "7px 4px", background: "#fff" }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
