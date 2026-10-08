@@ -846,7 +846,7 @@ export default function App() {
   const [users, setUsers] = useState({});
   const [products, setProducts] = useState([]);
   const [banners, setBanners] = useState([]);
-  const [settings, setSettings] = useState({ orderEmail: "", orderWhatsapp: "", fiscalEmitente: {} });
+  const [settings, setSettings] = useState({ orderEmail: "", orderWhatsapp: "", fiscalEmitente: {}, categoryGroups: {} });
   const [clients, setClients] = useState([]);
   const [orders, setOrders] = useState([]);
   const [stockItems, setStockItems] = useState([]);
@@ -879,7 +879,7 @@ export default function App() {
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
-    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES, colors: sRow.data.colors || [], fiscalEmitente: sRow.data.fiscal_emitente || {} } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES, colors: [], fiscalEmitente: {} });
+    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES, colors: sRow.data.colors || [], fiscalEmitente: sRow.data.fiscal_emitente || {}, categoryGroups: sRow.data.category_groups || {} } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES, colors: [], fiscalEmitente: {}, categoryGroups: {} });
     setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
     setStockItems((siRows.data || []).map(rowToStockItem));
     setCutBatches((cbRows.data || []).map(rowToCutBatch));
@@ -902,7 +902,7 @@ export default function App() {
   const persistSettings = useCallback(async (next) => {
     setSettings(next);
     try {
-      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES, colors: next.colors || [], fiscal_emitente: next.fiscalEmitente || {} });
+      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES, colors: next.colors || [], fiscal_emitente: next.fiscalEmitente || {}, category_groups: next.categoryGroups || {} });
       if (error) throw error;
     } catch (e) { console.error("Erro ao salvar configurações:", e); }
   }, []);
@@ -1504,7 +1504,7 @@ function rowToStockItem(r) {
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
         <PedidosAdmin orders={orders} updateStatus={updateOrderStatus} scopeUsername={session.username} readOnly clients={clientsForCart} onCopyOrder={copyOrderToCart} />
       ) : (
-        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} categories={settings.categories || DEFAULT_CATEGORIES} />
+        <CatalogView products={products} banners={banners} session={session} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} categories={settings.categories || DEFAULT_CATEGORIES} categoryGroups={settings.categoryGroups || {}} />
       )}
       {cartOpen && (
         <CartDrawer
@@ -1658,13 +1658,32 @@ function TopBar({ session, screen, setScreen, onLogout, cartCount, onOpenCart })
 }
 
 /* ---------------- CATALOG (client-facing) ---------------- */
-function CatalogView({ products, banners, session, addToCart, cart, commitCartChanges, categories }) {
+function CatalogView({ products, banners, session, addToCart, cart, commitCartChanges, categories, categoryGroups }) {
   const showPrice = session.role === "admin" || session.role === "admincentral" || session.role === "representante" || session.access === "atacado";
+  const [activeGroup, setActiveGroup] = useState("Todas");
   const [activeCat, setActiveCat] = useState("Todas");
+
   const presentCats = categories.filter((cat) => products.some((p) => p.category === cat));
-  const filtered = activeCat === "Todas" ? products : products.filter((p) => p.category === activeCat);
+
+  const groupOf = useMemo(() => {
+    const map = {};
+    Object.entries(categoryGroups || {}).forEach(([group, cats]) => (cats || []).forEach((cat) => { map[cat] = group; }));
+    return map;
+  }, [categoryGroups]);
+
+  const groupNames = Object.keys(categoryGroups || {}).filter((g) => presentCats.some((cat) => groupOf[cat] === g));
+  const ungroupedPresentCats = presentCats.filter((cat) => !groupOf[cat]);
+  const hasOutras = ungroupedPresentCats.length > 0;
+
+  const subcats = activeGroup === "Todas" ? presentCats
+    : activeGroup === "__outras__" ? ungroupedPresentCats
+    : presentCats.filter((cat) => groupOf[cat] === activeGroup);
+
+  function selectGroup(g) { setActiveGroup(g); setActiveCat("Todas"); }
+
+  const filtered = activeCat === "Todas" ? products.filter((p) => subcats.includes(p.category)) : products.filter((p) => p.category === activeCat);
   const grouped = activeCat === "Todas"
-    ? presentCats.map((cat) => ({ cat, items: products.filter((p) => p.category === cat) }))
+    ? subcats.map((cat) => ({ cat, items: products.filter((p) => p.category === cat) }))
     : [{ cat: activeCat, items: filtered }];
 
   return (
@@ -1679,10 +1698,18 @@ function CatalogView({ products, banners, session, addToCart, cart, commitCartCh
           {!showPrice && <div style={{ fontSize: 12, color: TOKENS.graphite, fontStyle: "italic" }}>Preços disponíveis para login atacado</div>}
         </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${TOKENS.line}`, paddingBottom: 16, marginBottom: 26 }}>
-          <CategoryPill active={activeCat === "Todas"} onClick={() => setActiveCat("Todas")}>Todas</CategoryPill>
-          {categories.map((cat) => <CategoryPill key={cat} active={activeCat === cat} onClick={() => setActiveCat(cat)}>{cat}</CategoryPill>)}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingBottom: groupNames.length || hasOutras ? 10 : 16, marginBottom: groupNames.length || hasOutras ? 10 : 26, borderBottom: groupNames.length || hasOutras ? "none" : `1px solid ${TOKENS.line}` }}>
+          <CategoryPill active={activeGroup === "Todas"} onClick={() => selectGroup("Todas")}>Todas</CategoryPill>
+          {groupNames.map((g) => <CategoryPill key={g} active={activeGroup === g} onClick={() => selectGroup(g)}>{g}</CategoryPill>)}
+          {hasOutras && <CategoryPill active={activeGroup === "__outras__"} onClick={() => selectGroup("__outras__")}>Outras</CategoryPill>}
         </div>
+
+        {activeGroup !== "Todas" && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${TOKENS.line}`, paddingBottom: 16, marginBottom: 26 }}>
+            <CategoryPill active={activeCat === "Todas"} onClick={() => setActiveCat("Todas")}>Todas</CategoryPill>
+            {subcats.map((cat) => <CategoryPill key={cat} active={activeCat === cat} onClick={() => setActiveCat(cat)}>{cat}</CategoryPill>)}
+          </div>
+        )}
 
         {products.length === 0 ? (
           <div style={{ color: TOKENS.graphite, padding: 40, textAlign: "center" }}>Nenhum modelo cadastrado ainda.</div>
@@ -3185,6 +3212,37 @@ function CatalogoModelosAdmin({ settings, setSettings, products, setProducts, cu
   const [novaCorNome, setNovaCorNome] = useState("");
   const [novaCorHex, setNovaCorHex] = useState("#7A2E38");
 
+  // Grupos de categoria (ex: POLIAMIDA, AVELUDADO, CANELADO, JACQUARD) usados
+  // como filtro de duas camadas na vitrine: grupo (tecido/linha) > categoria
+  // (subcategoria, o item em si). Cada categoria pertence a no máximo um
+  // grupo; a que não tiver grupo aparece em "Outras" na vitrine.
+  const categoryGroups = settings.categoryGroups || {};
+  const grupoNomes = Object.keys(categoryGroups);
+  const [novoGrupo, setNovoGrupo] = useState("");
+
+  function grupoDaCategoria(cat) {
+    return grupoNomes.find((g) => (categoryGroups[g] || []).includes(cat)) || "";
+  }
+  function addGrupo() {
+    const nome = novoGrupo.trim().toUpperCase();
+    if (!nome) return;
+    if (categoryGroups[nome]) { alert("Esse grupo já existe."); return; }
+    setSettings({ ...settings, categoryGroups: { ...categoryGroups, [nome]: [] } });
+    setNovoGrupo("");
+  }
+  function removeGrupo(nome) {
+    if (!confirm(`Remover o grupo "${nome}"? As categorias dele voltam a aparecer em "Outras" na vitrine.`)) return;
+    const next = { ...categoryGroups };
+    delete next[nome];
+    setSettings({ ...settings, categoryGroups: next });
+  }
+  function setCategoriaGrupo(cat, novoNomeGrupo) {
+    const next = {};
+    grupoNomes.forEach((g) => { next[g] = (categoryGroups[g] || []).filter((c) => c !== cat); });
+    if (novoNomeGrupo) next[novoNomeGrupo] = [...(next[novoNomeGrupo] || []), cat];
+    setSettings({ ...settings, categoryGroups: next });
+  }
+
   function addCategoria() {
     const nome = novaCategoria.trim();
     if (!nome) return;
@@ -3310,6 +3368,38 @@ function CatalogoModelosAdmin({ settings, setSettings, products, setProducts, cu
                 <button onClick={() => setEditingCategoria(null)} style={btnGhostSmall}>Cancelar</button>
               </div>
             )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 18, color: TOKENS.ink, marginBottom: 4 }}>Grupos de categoria (filtro da vitrine)</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 18 }}>Organize as categorias em grupos (ex: POLIAMIDA, AVELUDADO, CANELADO, JACQUARD). Na vitrine, o cliente filtra primeiro pelo grupo e depois pela categoria dentro dele. Categoria sem grupo aparece em "Outras".</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <input value={novoGrupo} onChange={(e) => setNovoGrupo(e.target.value.toUpperCase())} placeholder="Novo grupo (ex: POLIAMIDA)" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && addGrupo()} />
+        <button onClick={addGrupo} style={btnPrimary}><Plus size={14} /> Adicionar</button>
+      </div>
+
+      {grupoNomes.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          {grupoNomes.map((g) => (
+            <div key={g} style={{ display: "flex", alignItems: "center", gap: 6, background: TOKENS.ivorySoft, border: `1px solid ${TOKENS.line}`, borderRadius: 16, padding: "5px 6px 5px 12px", fontSize: 12.5 }}>
+              <span>{g}</span>
+              <span style={{ color: TOKENS.graphite, fontSize: 11 }}>({(categoryGroups[g] || []).length})</span>
+              <button onClick={() => removeGrupo(g)} style={{ ...iconBtnStyle, width: 20, height: 20 }}><Trash2 size={12} color="#A5453F" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", marginBottom: 28 }}>
+        {categories.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: TOKENS.graphite }}>Cadastre categorias acima para poder agrupá-las.</div>}
+        {categories.map((c) => (
+          <div key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: `1px solid ${TOKENS.ivorySoft}` }}>
+            <span style={{ fontSize: 12.5, color: TOKENS.ink }}>{c}</span>
+            <select value={grupoDaCategoria(c)} onChange={(e) => setCategoriaGrupo(c, e.target.value)} style={{ ...inputStyle, width: "auto", padding: "5px 8px", fontSize: 12 }}>
+              <option value="">Sem grupo (Outras)</option>
+              {grupoNomes.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
           </div>
         ))}
       </div>
