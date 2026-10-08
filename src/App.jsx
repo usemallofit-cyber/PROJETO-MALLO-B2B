@@ -82,13 +82,24 @@ function rowToClient(r) {
 function orderToRow(o) {
   return { id: o.id, date: o.date, client_name: o.clientName, seller_name: o.sellerName, seller_role: o.sellerRole,
     seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [],
-    collected_by: o.collectedBy || null, collected_at: o.collectedAt || null, note: o.note || null };
+    collected_by: o.collectedBy || null, collected_at: o.collectedAt || null, note: o.note || null,
+    commission_pct: o.commissionPct === "" || o.commissionPct === undefined ? null : o.commissionPct };
 }
 function rowToOrder(r) {
   return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
     sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [],
-    collectedBy: r.collected_by, collectedAt: r.collected_at, note: r.note };
+    collectedBy: r.collected_by, collectedAt: r.collected_at, note: r.note,
+    commissionPct: r.commission_pct === null || r.commission_pct === undefined ? "" : r.commission_pct };
 }
+
+// Comissão de representante: porcentagem padrão por representante
+// (rep_settings) e meta de faturamento lançada mês a mês (rep_goals, ano-mês
+// no formato "YYYY-MM"). Cada pedido pode opcionalmente ter sua própria
+// comissão (commissionPct, editável venda a venda) que substitui a padrão.
+function repSettingToRow(s) { return { rep_username: s.repUsername, default_commission_pct: s.defaultCommissionPct || 0 }; }
+function rowToRepSetting(r) { return { repUsername: r.rep_username, defaultCommissionPct: r.default_commission_pct || 0 }; }
+function repGoalToRow(g) { return { id: g.id, rep_username: g.repUsername, year_month: g.yearMonth, meta: g.meta || 0 }; }
+function rowToRepGoal(r) { return { id: r.id, repUsername: r.rep_username, yearMonth: r.year_month, meta: r.meta || 0 }; }
 
 function cutBatchToRow(c) {
   return { id: c.id, product_id: c.productId, variant_id: c.variantId, model: c.model, color: c.color,
@@ -852,6 +863,8 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [stockItems, setStockItems] = useState([]);
   const [cutBatches, setCutBatches] = useState([]);
+  const [repSettings, setRepSettings] = useState([]);
+  const [repGoals, setRepGoals] = useState([]);
   const [session, setSession] = useState(null);
   const [screen, setScreen] = useState("catalog");
   const [cart, setCart] = useState([]);
@@ -865,7 +878,7 @@ export default function App() {
 
   async function loadAppData() {
     await supabase.auth.getSession(); // garante que a sessão já está pronta antes das buscas abaixo
-    const [profRows, pRows, bRows, sRow, clRows, ordRows, siRows, cbRows] = await Promise.all([
+    const [profRows, pRows, bRows, sRow, clRows, ordRows, siRows, cbRows, rsRows, rgRows] = await Promise.all([
       withRetry(() => supabase.from("profiles").select("*")),
       withRetry(() => supabase.from("products").select("*")),
       withRetry(() => supabase.from("banners").select("*").order("sort_order")),
@@ -874,6 +887,8 @@ export default function App() {
       withRetry(() => supabase.from("orders").select("*")),
       withRetry(() => supabase.from("stock_items").select("*")),
       withRetry(() => supabase.from("cut_batches").select("*")),
+      withRetry(() => supabase.from("rep_settings").select("*")),
+      withRetry(() => supabase.from("rep_goals").select("*")),
     ]);
     const finalUsers = {};
     (profRows.data || []).forEach((p) => { finalUsers[p.username] = { name: p.name, role: p.role, access: p.access, permissions: p.permissions, authEmail: AUTH_EMAIL_OVERRIDES[p.username] || `${p.username}@mallo.internal` }; });
@@ -884,6 +899,8 @@ export default function App() {
     setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
     setStockItems((siRows.data || []).map(rowToStockItem));
     setCutBatches((cbRows.data || []).map(rowToCutBatch));
+    setRepSettings((rsRows.data || []).map(rowToRepSetting));
+    setRepGoals((rgRows.data || []).map(rowToRepGoal));
     return finalUsers;
   }
 
@@ -949,6 +966,16 @@ function rowToStockItem(r) {
     setCutBatches(next);
     try { await diffSyncTable("cut_batches", "id", prev, next, cutBatchToRow); } catch (e) { console.error("Erro ao salvar cortes:", e); }
   }, [cutBatches]);
+  const persistRepSettings = useCallback(async (next) => {
+    const prev = repSettings;
+    setRepSettings(next);
+    try { await diffSyncTable("rep_settings", "repUsername", prev, next, repSettingToRow); } catch (e) { console.error("Erro ao salvar comissão padrão:", e); }
+  }, [repSettings]);
+  const persistRepGoals = useCallback(async (next) => {
+    const prev = repGoals;
+    setRepGoals(next);
+    try { await diffSyncTable("rep_goals", "id", prev, next, repGoalToRow); } catch (e) { console.error("Erro ao salvar metas:", e); }
+  }, [repGoals]);
 
   // Funcionário lança um corte: fica pendente até admin/admincentral aprovar
   // — não soma em nenhum estoque ainda, é só um registro aguardando revisão.
@@ -1497,7 +1524,7 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} persistCutBatches={persistCutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} setOrders={persistOrders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} persistCutBatches={persistCutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} repSettings={repSettings} persistRepSettings={persistRepSettings} repGoals={repGoals} persistRepGoals={persistRepGoals} />
       ) : screen === "central" && session.role === "admincentral" ? (
         <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
@@ -2227,7 +2254,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, persistCutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, setOrders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, persistCutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo, repSettings, persistRepSettings, repGoals, persistRepGoals }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -2235,6 +2262,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
     { id: "relatorios-corte", label: "Relatórios Estoque e Corte", icon: BarChart3 },
     { id: "catalogo-modelos", label: "Catálogo de Modelos", icon: Crown },
     { id: "pedidos", label: "Pedidos", icon: Archive },
+    { id: "representantes-painel", label: "Representantes", icon: TrendingUp },
     { id: "clientes", label: "Clientes (Cadastro)", icon: Building2 },
     { id: "login-clientes", label: "Login de Clientes", icon: Users },
     { id: "representantes", label: "Login de Representantes", icon: UserCheck },
@@ -2264,6 +2292,7 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} orders={orders} stockItems={stockItems} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} products={products} setProducts={setProducts} cutBatches={cutBatches} persistCutBatches={persistCutBatches} stockItems={stockItems} setStockItems={setStockItems} />}
       {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
+      {tab === "representantes-painel" && <RepresentantesAdmin users={users} orders={orders} setOrders={setOrders} repSettings={repSettings} persistRepSettings={persistRepSettings} repGoals={repGoals} persistRepGoals={persistRepGoals} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
       {tab === "representantes" && <ClientesAdmin users={users} setUsers={setUsers} role="representante" title="Login de Representantes" />}
@@ -2807,6 +2836,246 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
               <button onClick={confirmCopy} disabled={!copyClientId} style={{ ...btnPrimary, opacity: copyClientId ? 1 : 0.5, cursor: copyClientId ? "pointer" : "not-allowed" }}>Copiar pedido</button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Painel de performance de representantes: vendas, meta do mês, comissão
+// (padrão por representante + override por venda), velocímetro de meta,
+// mês a mês e curva ABC — tudo calculado a partir dos pedidos já existentes
+// (sellerUsername = login do representante), sem duplicar dado nenhum.
+function currentYearMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function yearMonthOf(dateStr) {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function SpeedGauge({ pct }) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const angleDeg = 180 - (clamped / 100) * 180;
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const needleLen = 68;
+  const nx = 100 + needleLen * Math.cos(angleRad);
+  const ny = 100 - needleLen * Math.sin(angleRad);
+  const arcColor = clamped >= 85 ? TOKENS.ok : clamped >= 50 ? "#B8862E" : "#A5453F";
+  return (
+    <svg viewBox="0 0 200 118" width="100%" style={{ maxWidth: 260, display: "block", margin: "0 auto" }}>
+      <path d="M 10 100 A 90 90 0 0 1 190 100" fill="none" stroke={TOKENS.ivorySoft} strokeWidth="16" strokeLinecap="round" pathLength="100" />
+      <path d="M 10 100 A 90 90 0 0 1 190 100" fill="none" stroke={arcColor} strokeWidth="16" strokeLinecap="round" pathLength="100" strokeDasharray={`${clamped} 100`} />
+      <line x1="100" y1="100" x2={nx} y2={ny} stroke={TOKENS.ink} strokeWidth="3" strokeLinecap="round" />
+      <circle cx="100" cy="100" r="6" fill={TOKENS.ink} />
+      <text x="100" y="116" textAnchor="middle" fontSize="20" fontFamily="Georgia, serif" fill={TOKENS.ink}>{pct.toFixed(0)}%</text>
+    </svg>
+  );
+}
+
+function RepresentantesAdmin({ users, orders, setOrders, repSettings, persistRepSettings, repGoals, persistRepGoals }) {
+  const reps = useMemo(() => Object.entries(users || {})
+    .filter(([, u]) => u.role === "representante")
+    .map(([username, u]) => ({ username, name: u.name }))
+    .sort((a, b) => a.name.localeCompare(b.name)), [users]);
+
+  const [selectedRep, setSelectedRep] = useState("");
+  useEffect(() => { if (!selectedRep && reps.length) setSelectedRep(reps[0].username); }, [reps]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [yearMonth, setYearMonth] = useState(currentYearMonth());
+
+  const repSetting = repSettings.find((r) => r.repUsername === selectedRep);
+  const [defaultPct, setDefaultPct] = useState("0");
+  useEffect(() => { setDefaultPct(String(repSetting?.defaultCommissionPct ?? 0)); }, [selectedRep, repSetting?.defaultCommissionPct]);
+  const [savingDefault, setSavingDefault] = useState(false);
+  async function saveDefaultPct() {
+    setSavingDefault(true);
+    const n = Math.max(0, Number(String(defaultPct).replace(",", ".")) || 0);
+    const exists = repSettings.some((r) => r.repUsername === selectedRep);
+    const next = exists
+      ? repSettings.map((r) => r.repUsername === selectedRep ? { ...r, defaultCommissionPct: n } : r)
+      : [...repSettings, { repUsername: selectedRep, defaultCommissionPct: n }];
+    await persistRepSettings(next);
+    setSavingDefault(false);
+  }
+
+  const repGoal = repGoals.find((g) => g.repUsername === selectedRep && g.yearMonth === yearMonth);
+  const [metaInput, setMetaInput] = useState("0");
+  useEffect(() => { setMetaInput(String(repGoal?.meta ?? 0)); }, [selectedRep, yearMonth, repGoal?.meta]);
+  const [savingMeta, setSavingMeta] = useState(false);
+  async function saveMeta() {
+    setSavingMeta(true);
+    const n = Math.max(0, Number(String(metaInput).replace(",", ".")) || 0);
+    const exists = repGoals.some((g) => g.repUsername === selectedRep && g.yearMonth === yearMonth);
+    const next = exists
+      ? repGoals.map((g) => (g.repUsername === selectedRep && g.yearMonth === yearMonth) ? { ...g, meta: n } : g)
+      : [...repGoals, { id: uid("rg_"), repUsername: selectedRep, yearMonth, meta: n }];
+    await persistRepGoals(next);
+    setSavingMeta(false);
+  }
+
+  const repOrdersAll = useMemo(() => orders.filter((o) => o.sellerUsername === selectedRep && o.status !== "Pedido cancelado"), [orders, selectedRep]);
+  const monthOrders = useMemo(() => repOrdersAll.filter((o) => yearMonthOf(o.date) === yearMonth), [repOrdersAll, yearMonth]);
+
+  function orderRevenue(o) { return o.items.reduce((a, it) => a + it.qty * it.price, 0); }
+  function orderCommissionPct(o) { return (o.commissionPct === "" || o.commissionPct === null || o.commissionPct === undefined) ? (repSetting?.defaultCommissionPct ?? 0) : o.commissionPct; }
+  function orderCommissionValue(o) { return orderRevenue(o) * orderCommissionPct(o) / 100; }
+
+  const monthRevenue = monthOrders.reduce((a, o) => a + orderRevenue(o), 0);
+  const monthCommission = monthOrders.reduce((a, o) => a + orderCommissionValue(o), 0);
+  const meta = repGoal?.meta || 0;
+  const pct = meta > 0 ? (monthRevenue / meta) * 100 : 0;
+
+  function setOrderCommission(orderId, val) {
+    const n = val === "" ? "" : Math.max(0, Number(String(val).replace(",", ".")) || 0);
+    setOrders(orders.map((o) => o.id === orderId ? { ...o, commissionPct: n } : o));
+  }
+
+  const { totals: monthlyTotals } = useMemo(() => computeMonthlySales(repOrdersAll), [repOrdersAll]);
+  const abcRows = useMemo(() => computeABC(repOrdersAll), [repOrdersAll]);
+  const clsColor = { A: TOKENS.ok, B: "#B8862E", C: "#A5453F" };
+
+  const [exportando, setExportando] = useState(false);
+  async function exportarVendasExcel() {
+    setExportando(true);
+    try {
+      const XLSX = await loadXLSX();
+      const rows = monthOrders.map((o) => ({
+        "Data": new Date(o.date).toLocaleDateString("pt-BR"), "Cliente": o.clientName, "Status": o.status,
+        "Peças": o.items.reduce((a, it) => a + it.qty, 0), "Receita": orderRevenue(o),
+        "Comissão %": orderCommissionPct(o), "Comissão R$": orderCommissionValue(o),
+      }));
+      downloadXLSX(XLSX, rows, "Vendas", `vendas-${selectedRep}-${yearMonth}.xlsx`);
+    } finally { setExportando(false); }
+  }
+
+  if (reps.length === 0) {
+    return <div style={{ color: TOKENS.graphite, padding: 30 }}>Nenhum representante cadastrado ainda. Crie um login em "Login de Representantes".</div>;
+  }
+
+  const repName = reps.find((r) => r.username === selectedRep)?.name || selectedRep;
+  const mesLabel = MONTHS_PT[Number(yearMonth.split("-")[1]) - 1];
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 22, flexWrap: "wrap" }}>
+        <select value={selectedRep} onChange={(e) => setSelectedRep(e.target.value)} style={{ ...inputStyle, width: "auto", fontSize: 14, fontWeight: 600 }}>
+          {reps.map((r) => <option key={r.username} value={r.username}>{r.name}</option>)}
+        </select>
+        <input type="month" value={yearMonth} onChange={(e) => setYearMonth(e.target.value)} style={{ ...inputStyle, width: "auto" }} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 24 }}>
+        <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 18, textAlign: "center" }}>
+          <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Meta do mês × realizado</div>
+          <SpeedGauge pct={pct} />
+          <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginTop: 4 }}>R$ {formatBRL(monthRevenue)} de R$ {formatBRL(meta)}</div>
+        </div>
+
+        <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: 18 }}>
+          <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Meta de {mesLabel}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={metaInput} onChange={(e) => setMetaInput(e.target.value)} style={inputStyle} placeholder="0,00" />
+            <button onClick={saveMeta} disabled={savingMeta} style={{ ...btnPrimary, whiteSpace: "nowrap" }}><Check size={14} /> Salvar</button>
+          </div>
+          <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 8 }}>Valor de faturamento a ser atingido neste mês.</div>
+
+          <div style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5, margin: "18px 0 10px" }}>Comissão padrão</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={defaultPct} onChange={(e) => setDefaultPct(e.target.value)} style={{ ...inputStyle, maxWidth: 100 }} placeholder="0" />
+            <span style={{ fontSize: 13, color: TOKENS.graphite }}>%</span>
+            <button onClick={saveDefaultPct} disabled={savingDefault} style={{ ...btnPrimary, whiteSpace: "nowrap" }}><Check size={14} /> Salvar</button>
+          </div>
+          <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 8 }}>Usada em toda venda que não tiver uma comissão própria lançada.</div>
+        </div>
+
+        <div style={{ background: TOKENS.ink, color: "#fff", borderRadius: 8, padding: 18 }}>
+          <div style={{ fontSize: 10.5, color: TOKENS.sand, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Resumo de {mesLabel}</div>
+          <div style={{ fontFamily: "Georgia, serif", fontSize: 24, marginBottom: 4 }}>R$ {formatBRL(monthRevenue)}</div>
+          <div style={{ fontSize: 12, color: TOKENS.sand, marginBottom: 12 }}>{monthOrders.length} pedido(s) · {monthOrders.reduce((a, o) => a + o.items.reduce((x, it) => x + it.qty, 0), 0)} peça(s)</div>
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: 12, fontSize: 13 }}>Comissão do mês: <b>R$ {formatBRL(monthCommission)}</b></div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink }}>Vendas de {mesLabel} — relatório</div>
+        <button onClick={exportarVendasExcel} disabled={exportando || monthOrders.length === 0} style={btnGhostSmall}><Download size={13} /> {exportando ? "Gerando..." : "Exportar Excel"}</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden", marginBottom: 30 }}>
+        {monthOrders.length === 0 ? (
+          <div style={{ padding: 20, fontSize: 13, color: TOKENS.graphite }}>Nenhuma venda de {repName} neste mês.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead><tr style={{ textAlign: "left", background: TOKENS.ivorySoft }}>
+              <th style={thStyle}>Data</th><th style={thStyle}>Cliente</th><th style={thStyle}>Status</th><th style={thStyle}>Peças</th><th style={thStyle}>Receita</th><th style={thStyle}>Comissão</th><th style={thStyle}>Valor comissão</th>
+            </tr></thead>
+            <tbody>
+              {monthOrders.slice().reverse().map((o) => {
+                const rev = orderRevenue(o);
+                const pctC = orderCommissionPct(o);
+                const isOverride = o.commissionPct !== "" && o.commissionPct !== null && o.commissionPct !== undefined;
+                return (
+                  <tr key={o.id} style={{ borderTop: `1px solid ${TOKENS.ivorySoft}` }}>
+                    <td style={tdStyle}>{new Date(o.date).toLocaleDateString("pt-BR")}</td>
+                    <td style={tdStyle}>{o.clientName}</td>
+                    <td style={tdStyle}>{o.status}</td>
+                    <td style={tdStyle}>{o.items.reduce((a, it) => a + it.qty, 0)}</td>
+                    <td style={tdStyle}>R$ {formatBRL(rev)}</td>
+                    <td style={tdStyle}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input value={isOverride ? o.commissionPct : ""}
+                          onChange={(e) => setOrderCommission(o.id, e.target.value)}
+                          placeholder={String(repSetting?.defaultCommissionPct ?? 0)}
+                          style={{ ...inputStyle, width: 54, padding: "4px 6px" }} />
+                        <span>%</span>
+                        {!isOverride && <span style={{ fontSize: 10, color: TOKENS.graphite }}>(padrão)</span>}
+                      </div>
+                    </td>
+                    <td style={tdStyle}>R$ {formatBRL(rev * pctC / 100)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink, marginBottom: 10 }}>Mês a mês ({new Date().getFullYear()})</div>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 16, height: 260, marginBottom: 30 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={monthlyTotals}>
+            <CartesianGrid strokeDasharray="3 3" stroke={TOKENS.line} />
+            <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v) => `R$ ${formatBRL(v)}`} />
+            <Bar dataKey="revenue" fill={TOKENS.wine} radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 17, color: TOKENS.ink, marginBottom: 4 }}>Curva ABC de {repName}</div>
+      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 14 }}>Classificação dos modelos vendidos por este representante, pela receita acumulada: A = até 80%, B = até 95%, C = restante. (Todo o período.)</div>
+      {abcRows.length === 0 ? (
+        <div style={{ color: TOKENS.graphite, padding: 30 }}>Ainda não há vendas registradas para calcular a curva ABC.</div>
+      ) : (
+        <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead><tr style={{ textAlign: "left", background: TOKENS.ivorySoft }}>
+              <th style={thStyle}>Modelo</th><th style={thStyle}>Receita</th><th style={thStyle}>% Receita</th><th style={thStyle}>% Acumulado</th><th style={thStyle}>Classe</th>
+            </tr></thead>
+            <tbody>
+              {abcRows.map((r) => (
+                <tr key={r.model} style={{ borderTop: `1px solid ${TOKENS.ivorySoft}` }}>
+                  <td style={tdStyle}>{r.model}</td>
+                  <td style={tdStyle}>R$ {formatBRL(r.revenue)}</td>
+                  <td style={tdStyle}>{r.pct.toFixed(1)}%</td>
+                  <td style={tdStyle}>{r.cumPct.toFixed(1)}%</td>
+                  <td style={tdStyle}><span style={{ background: clsColor[r.cls], color: "#fff", padding: "2px 8px", borderRadius: 10, fontSize: 11 }}>{r.cls}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
