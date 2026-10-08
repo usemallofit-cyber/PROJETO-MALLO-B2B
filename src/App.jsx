@@ -816,30 +816,39 @@ const CLIENT_FIELDS = [
   { key: "references", label: "Referências comerciais" },
 ];
 
-// Aplica a máscara enquanto digita — só números entram, os pontos/traço/barra
-// aparecem sozinhos.
+// Aplica a máscara enquanto digita. Aceita o CNPJ clássico (só números) e o
+// novo CNPJ alfanumérico da Receita (vigente p/ empresas novas desde jul/2026):
+// as 12 primeiras posições podem ter letras, os 2 dígitos verificadores finais
+// são sempre numéricos. Letras digitadas são sempre maiúsculas.
 function maskCNPJ(v) {
-  const d = v.replace(/\D/g, "").slice(0, 14);
-  if (d.length > 12) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})/, "$1.$2.$3/$4-$5");
-  if (d.length > 8) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{0,4})/, "$1.$2.$3/$4");
-  if (d.length > 5) return d.replace(/^(\d{2})(\d{3})(\d{0,3})/, "$1.$2.$3");
-  if (d.length > 2) return d.replace(/^(\d{2})(\d{0,3})/, "$1.$2");
+  const clean = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const base = clean.slice(0, 12).replace(/[^A-Z0-9]/g, "");
+  const dv = clean.slice(12, 14).replace(/\D/g, "");
+  const d = (base + dv).slice(0, 14);
+  if (d.length > 12) return d.replace(/^(.{2})(.{3})(.{3})(.{4})(.{0,2})/, "$1.$2.$3/$4-$5");
+  if (d.length > 8) return d.replace(/^(.{2})(.{3})(.{3})(.{0,4})/, "$1.$2.$3/$4");
+  if (d.length > 5) return d.replace(/^(.{2})(.{3})(.{0,3})/, "$1.$2.$3");
+  if (d.length > 2) return d.replace(/^(.{2})(.{0,3})/, "$1.$2");
   return d;
 }
 // Confere o dígito verificador de verdade (algoritmo oficial da Receita),
-// não só a formatação — pega CNPJ digitado errado ou inventado.
+// não só a formatação — pega CNPJ digitado errado ou inventado. Funciona
+// tanto para o CNPJ clássico (só números) quanto para o novo alfanumérico:
+// o valor de cada caractere é "código ASCII − 48" (dígito 0-9 vale 0-9,
+// letra A-Z vale 17-42); os 2 últimos dígitos são sempre numéricos.
 function isValidCNPJ(v) {
-  const d = (v || "").replace(/\D/g, "");
-  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+  const d = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (d.length !== 14 || !/^[0-9]{2}$/.test(d.slice(12)) || /^(.)\1{13}$/.test(d)) return false;
+  const val = (ch) => ch.charCodeAt(0) - 48;
   const calc = (base) => {
     let pesos = base.length === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-    const soma = base.split("").reduce((a, n, i) => a + Number(n) * pesos[i], 0);
+    const soma = base.split("").reduce((a, ch, i) => a + val(ch) * pesos[i], 0);
     const resto = soma % 11;
     return resto < 2 ? 0 : 11 - resto;
   };
   const dv1 = calc(d.slice(0, 12));
-  const dv2 = calc(d.slice(0, 12) + dv1);
-  return d === d.slice(0, 12) + dv1 + dv2;
+  const dv2 = calc(d.slice(0, 12) + String(dv1));
+  return d === d.slice(0, 12) + String(dv1) + String(dv2);
 }
 function maskCEP(v) {
   const d = v.replace(/\D/g, "").slice(0, 8);
@@ -856,9 +865,13 @@ async function buscarCEP(cepDigits) {
     return data;
   } catch { return null; }
 }
-async function buscarCNPJ(cnpjDigits) {
+async function buscarCNPJ(cnpjClean) {
   try {
-    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjDigits}`);
+    // cnpjClean: 14 caracteres alfanuméricos (sem pontuação), o novo CNPJ
+    // alfanumérico ainda pode não estar disponível em todo provedor da
+    // BrasilAPI — se não achar, a função só retorna null e o preenchimento
+    // automático simplesmente não acontece (o usuário preenche à mão).
+    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjClean}`);
     if (!res.ok) return null;
     return await res.json();
   } catch { return null; }
@@ -3154,12 +3167,12 @@ function ClientForm({ initial, onCancel, onSave }) {
   async function handleCnpjChange(value) {
     const masked = maskCNPJ(value);
     setC((s) => ({ ...s, cnpj: masked }));
-    const digits = masked.replace(/\D/g, "");
-    if (digits.length === 14) {
-      if (!isValidCNPJ(digits)) { setCnpjInvalido(true); return; }
+    const clean = masked.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (clean.length === 14) {
+      if (!isValidCNPJ(clean)) { setCnpjInvalido(true); return; }
       setCnpjInvalido(false);
       setBuscando("cnpj");
-      const dados = await buscarCNPJ(digits);
+      const dados = await buscarCNPJ(clean);
       setBuscando("");
       if (dados) {
         setC((s) => ({
@@ -3221,7 +3234,7 @@ function ClientForm({ initial, onCancel, onSave }) {
                 {f.key === "references" ? (
                   <textarea value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={{ ...estilo, minHeight: 60, resize: "vertical" }} />
                 ) : f.key === "cnpj" ? (
-                  <input value={c.cnpj || ""} onChange={(e) => handleCnpjChange(e.target.value)} placeholder="Só os números" style={estilo} />
+                  <input value={c.cnpj || ""} onChange={(e) => handleCnpjChange(e.target.value)} placeholder="Números (ou letras, no novo CNPJ alfanumérico)" style={estilo} />
                 ) : f.key === "cep" ? (
                   <input value={c.cep || ""} onChange={(e) => handleCepChange(e.target.value)} placeholder="Só os números" style={estilo} />
                 ) : (
