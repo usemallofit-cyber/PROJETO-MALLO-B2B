@@ -83,13 +83,15 @@ function orderToRow(o) {
   return { id: o.id, date: o.date, client_name: o.clientName, seller_name: o.sellerName, seller_role: o.sellerRole,
     seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [],
     collected_by: o.collectedBy || null, collected_at: o.collectedAt || null, note: o.note || null,
-    commission_pct: o.commissionPct === "" || o.commissionPct === undefined ? null : o.commissionPct };
+    commission_pct: o.commissionPct === "" || o.commissionPct === undefined ? null : o.commissionPct,
+    payment_condition: o.paymentCondition || null };
 }
 function rowToOrder(r) {
   return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
     sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [],
     collectedBy: r.collected_by, collectedAt: r.collected_at, note: r.note,
-    commissionPct: r.commission_pct === null || r.commission_pct === undefined ? "" : r.commission_pct };
+    commissionPct: r.commission_pct === null || r.commission_pct === undefined ? "" : r.commission_pct,
+    paymentCondition: r.payment_condition || null };
 }
 
 // Comissão de representante: porcentagem padrão por representante
@@ -588,7 +590,7 @@ async function buildCatalogPdfBlob(products) {
 
 
 
-async function buildOrderPdfBlob(items, session, showPrice, client, note) {
+async function buildOrderPdfBlob(items, session, showPrice, client, note, paymentCondition) {
   const jsPDF = await loadJsPDF();
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -671,6 +673,15 @@ async function buildOrderPdfBlob(items, session, showPrice, client, note) {
     if (y > 760) { doc.addPage(); y = 46; }
     doc.setFont("times", "bold"); doc.setFontSize(15); doc.setTextColor(23, 22, 26);
     doc.text(`Total: R$ ${formatBRL(total)}`, marginX, y + 20);
+    if (paymentCondition) {
+      y += 38;
+      if (y > 780) { doc.addPage(); y = 46; }
+      doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(90, 86, 76);
+      const pagLabel = paymentCondition.discountPct
+        ? `Condição de pagamento: ${paymentCondition.label} (${paymentCondition.discountPct}% de desconto) — total R$ ${formatBRL(paymentCondition.total)}`
+        : `Condição de pagamento: ${paymentCondition.label}`;
+      doc.text(pagLabel, marginX, y);
+    }
   }
   return doc.output("blob");
 }
@@ -1465,7 +1476,7 @@ function rowToStockItem(r) {
   function removeCartItem(cartItemId) { persistCart(cart.filter((c) => c.cartItemId !== cartItemId)); }
   function clearCart() { persistCart([]); setSelectedClient(null); }
 
-  async function finalizeOrder(note) {
+  async function finalizeOrder(note, paymentCondition) {
     if (!cart.length || !session) return;
     // Confere a disponibilidade agora mesmo, pro aviso ser rápido — o abate
     // de verdade acontece no servidor (função finalize-order), que confere
@@ -1488,7 +1499,7 @@ function rowToStockItem(r) {
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, sku: prod?.sku || "", productId: c.productId, variantId: c.variantId, stockType: c.stockType || "pronta" };
     });
     const { data, error } = await withRetry(() => supabase.functions.invoke("finalize-order", {
-      body: { clientName: selectedClient?.buyerName || session.name || session.username, items, note: note || "" },
+      body: { clientName: selectedClient?.buyerName || session.name || session.username, items, note: note || "", paymentCondition: paymentCondition || null },
     }));
     if (error || data?.error) {
       if (data?.shortages?.length) {
@@ -1964,7 +1975,7 @@ function BannerCarousel({ banners }) {
 }
 
 /* ---------------- CART ---------------- */
-function buildOrderText(cart, session, showPrice, client) {
+function buildOrderText(cart, session, showPrice, client, paymentCondition) {
   const lines = cart.map((c) => {
     const base = `${c.qty}x ${c.model} | Cor: ${c.color} | Tam: ${c.size}`;
     return showPrice ? `${base} | R$ ${c.price} cada` : base;
@@ -1978,6 +1989,7 @@ function buildOrderText(cart, session, showPrice, client) {
   }
   text += `\n\n${lines.join("\n")}`;
   if (showPrice) text += `\n\nTotal: R$ ${formatBRL(total)}`;
+  if (showPrice && paymentCondition) text += `\nCondição de pagamento: ${paymentCondition.label}${paymentCondition.discountPct ? ` (${paymentCondition.discountPct}% de desconto — total R$ ${formatBRL(paymentCondition.total)})` : ""}`;
   return text;
 }
 
@@ -2002,7 +2014,30 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
   const valorPronta = cart.filter((c) => c.stockType !== "producao").reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
   const valorProducao = cart.filter((c) => c.stockType === "producao").reduce((a, c) => a + parseBRL(c.price) * c.qty, 0);
   const MIN_PEDIDO = 2500;
-  const orderText = useMemo(() => buildOrderText(displayCart, session, showPrice, displayClient), [displayCart, session, showPrice, displayClient]);
+  const MIN_PEDIDO_5X = 6000;
+  const [paymentCondition, setPaymentCondition] = useState(null);
+  const showPaymentSection = showPrice && total >= MIN_PEDIDO;
+  const paymentOptions = useMemo(() => {
+    if (!showPaymentSection) return [];
+    const opts = [
+      { installments: 1, label: "1x", discountPct: 5, total: total * 0.95 },
+      { installments: 2, label: "2x sem juros", discountPct: 0, total },
+      { installments: 3, label: "3x sem juros", discountPct: 0, total },
+      { installments: 4, label: "4x sem juros", discountPct: 0, total },
+    ];
+    if (total >= MIN_PEDIDO_5X) opts.push({ installments: 5, label: "5x sem juros", discountPct: 0, total });
+    return opts;
+  }, [showPaymentSection, total]);
+  // Se o carrinho mudar e a condição escolhida deixar de existir (ex: tinha
+  // 5x selecionado e o total caiu abaixo de 6000, ou caiu abaixo do mínimo),
+  // limpa a seleção em vez de deixar uma condição inválida marcada.
+  useEffect(() => {
+    if (!showPaymentSection) { if (paymentCondition) setPaymentCondition(null); return; }
+    if (paymentCondition && !paymentOptions.some((o) => o.installments === paymentCondition.installments)) setPaymentCondition(null);
+  }, [showPaymentSection, paymentOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+  const paymentReady = !showPaymentSection || !!paymentCondition;
+  const displayPaymentCondition = step === "finalize" && finalizedSnapshot ? finalizedSnapshot.paymentCondition : paymentCondition;
+  const orderText = useMemo(() => buildOrderText(displayCart, session, showPrice, displayClient, displayPaymentCondition), [displayCart, session, showPrice, displayClient, displayPaymentCondition]);
   const orderEmail = (settings.orderEmail || "").trim();
   const mailHref = `mailto:${orderEmail}?subject=${encodeURIComponent(`Novo pedido - ${session.name || session.username}`)}&body=${encodeURIComponent(orderText)}`;
   const waDigits = (settings.orderWhatsapp || "").replace(/\D/g, "");
@@ -2033,7 +2068,7 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
     setDownloading(true);
     setSendError("");
     try {
-      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient, finalizedSnapshot?.note);
+      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient, finalizedSnapshot?.note, displayPaymentCondition);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = pdfFileName;
@@ -2071,7 +2106,7 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
     if (!hasWhats) return;
     setSendingWhats(true);
     try {
-      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient, finalizedSnapshot?.note);
+      const blob = await buildOrderPdfBlob(displayCart, session, showPrice, displayClient, finalizedSnapshot?.note, displayPaymentCondition);
       const file = new File([blob], pdfFileName, { type: "application/pdf" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: "Pedido", text: orderText });
@@ -2162,9 +2197,31 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
                   </div>
                 </div>
                 {showPrice && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 15 }}><span>Total</span><b style={{ color: TOKENS.wine, fontFamily: "Georgia, serif", fontSize: 19 }}>R$ {formatBRL(total)}</b></div>}
+
+                {showPaymentSection && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 1, color: TOKENS.graphite, marginBottom: 6 }}>Condição de pagamento</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {paymentOptions.map((o) => (
+                        <button key={o.installments} onClick={() => setPaymentCondition(o)}
+                          style={{ padding: "7px 12px", borderRadius: 16, fontSize: 12, cursor: "pointer",
+                            border: `1px solid ${paymentCondition?.installments === o.installments ? TOKENS.wine : TOKENS.line}`,
+                            background: paymentCondition?.installments === o.installments ? TOKENS.wine : "#fff",
+                            color: paymentCondition?.installments === o.installments ? "#fff" : TOKENS.graphite }}>
+                          {o.label}{o.discountPct ? ` (${o.discountPct}%)` : ""}
+                        </button>
+                      ))}
+                    </div>
+                    {paymentCondition?.discountPct > 0 && (
+                      <div style={{ fontSize: 11.5, color: TOKENS.ok, marginTop: 6 }}>Com desconto de {paymentCondition.discountPct}%: total R$ {formatBRL(paymentCondition.total)}</div>
+                    )}
+                  </div>
+                )}
+
                 {hasInsufficientStock && <div style={{ fontSize: 11.5, color: "#A5453F", marginBottom: 8, textAlign: "center" }}>Ajuste os itens em vermelho (estoque insuficiente) antes de finalizar.</div>}
-                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient, note }); onFinalizeOrder(note); setStep("finalize"); }} disabled={!clientReady || hasInsufficientStock} title={!clientReady ? "Selecione um cliente para este pedido" : hasInsufficientStock ? "Ajuste os itens em vermelho antes de finalizar" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (clientReady && !hasInsufficientStock) ? 1 : 0.5, cursor: (clientReady && !hasInsufficientStock) ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
+                <button onClick={() => { setFinalizedSnapshot({ items: cart, client: selectedClient, note, paymentCondition }); onFinalizeOrder(note, paymentCondition); setStep("finalize"); }} disabled={!clientReady || hasInsufficientStock || !paymentReady} title={!clientReady ? "Selecione um cliente para este pedido" : hasInsufficientStock ? "Ajuste os itens em vermelho antes de finalizar" : !paymentReady ? "Escolha a condição de pagamento" : ""} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (clientReady && !hasInsufficientStock && paymentReady) ? 1 : 0.5, cursor: (clientReady && !hasInsufficientStock && paymentReady) ? "pointer" : "not-allowed" }}>Finalizar pedido</button>
                 {!clientReady && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 6, textAlign: "center" }}>Selecione o cliente acima para continuar.</div>}
+                {clientReady && !paymentReady && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 6, textAlign: "center" }}>Escolha a condição de pagamento acima para continuar.</div>}
                 <button onClick={() => { if (confirm("Esvaziar o carrinho?")) clearCart(); }} style={{ ...btnGhostSmall, width: "100%", justifyContent: "center", marginTop: 8 }}>Esvaziar carrinho</button>
               </div>
             )}
@@ -2177,6 +2234,11 @@ function CartDrawer({ cart, products, onClose, showPrice, updateCartQty, removeC
             {displayClient && (
               <div style={{ background: TOKENS.ivorySoft, border: `1px solid ${TOKENS.sand}`, borderRadius: 4, padding: 10, marginBottom: 14, fontSize: 12 }}>
                 <b>{displayClient.buyerName}</b>{displayClient.cnpj ? ` · CNPJ ${displayClient.cnpj}` : ""}{displayClient.phone ? ` · ${displayClient.phone}` : ""}
+              </div>
+            )}
+            {displayPaymentCondition && (
+              <div style={{ background: TOKENS.ivorySoft, border: `1px solid ${TOKENS.sand}`, borderRadius: 4, padding: 10, marginBottom: 14, fontSize: 12 }}>
+                Condição de pagamento: <b>{displayPaymentCondition.label}</b>{displayPaymentCondition.discountPct ? ` — desconto de ${displayPaymentCondition.discountPct}%, total R$ ${formatBRL(displayPaymentCondition.total)}` : ""}
               </div>
             )}
             <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 12 }}>Fotos principais dos itens:</div>
@@ -2726,7 +2788,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
   async function downloadOrderPdf(o) {
     setDownloadingId(o.id);
     try {
-      const blob = await buildOrderPdfBlob(o.items, { name: o.sellerName, username: o.sellerUsername }, true, { buyerName: o.clientName }, o.note);
+      const blob = await buildOrderPdfBlob(o.items, { name: o.sellerName, username: o.sellerUsername }, true, { buyerName: o.clientName }, o.note, o.paymentCondition);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `pedido-${o.clientName.replace(/\s+/g, "-").toLowerCase()}-${o.id}.pdf`;
@@ -2774,6 +2836,7 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
                   </select>
                 )}
                 {lastLog && <div style={{ fontSize: 10, color: TOKENS.graphite, marginTop: 4 }}>Alterado por {lastLog.by} · {new Date(lastLog.when).toLocaleString("pt-BR")}</div>}
+                {o.paymentCondition && <div style={{ fontSize: 10.5, color: TOKENS.wine, marginTop: 4 }}>Pagamento: {o.paymentCondition.label}{o.paymentCondition.discountPct ? ` (${o.paymentCondition.discountPct}% desc.)` : ""}</div>}
                 {o.note && <div style={{ fontSize: 11, color: "#633806", background: "#FAEEDA", padding: "4px 8px", borderRadius: 3, marginTop: 5 }}><b>Obs:</b> {o.note}</div>}
                 {o.status === "Pedido completo" && o.collectedBy && <div style={{ fontSize: 10, color: TOKENS.ok, marginTop: 2 }}>Coletado por {o.collectedBy} · {o.collectedAt ? new Date(o.collectedAt).toLocaleString("pt-BR") : ""}</div>}
               </div>
