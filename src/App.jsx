@@ -59,10 +59,10 @@ function genPass() { const c = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = ""; f
 // reais do Supabase (snake_case), agora que produtos/banners/configurações
 // deixaram de ser um bloco único e viraram tabelas de verdade.
 function productToRow(p) {
-  return { id: p.id, model: p.model, sku: p.sku, category: p.category, description: p.description, price: p.price, cost_price: p.costPrice, variants: p.variants || [], next_item_seq: p.nextItemSeq || 1 };
+  return { id: p.id, model: p.model, sku: p.sku, category: p.category, description: p.description, price: p.price, cost_price: p.costPrice, variants: p.variants || [], next_item_seq: p.nextItemSeq || 1, ncm: p.ncm || null, cfop: p.cfop || null, unit: p.unit || "UN", cest: p.cest || null };
 }
 function rowToProduct(r) {
-  return { id: r.id, model: r.model, sku: r.sku, category: r.category, description: r.description, price: r.price, costPrice: r.cost_price, variants: r.variants || [], nextItemSeq: r.next_item_seq || 1 };
+  return { id: r.id, model: r.model, sku: r.sku, category: r.category, description: r.description, price: r.price, costPrice: r.cost_price, variants: r.variants || [], nextItemSeq: r.next_item_seq || 1, ncm: r.ncm || "", cfop: r.cfop || "", unit: r.unit || "UN", cest: r.cest || "" };
 }
 function bannerToRow(b, i) { return { id: b.id, url: b.url, sort_order: i }; }
 function rowToBanner(r) { return { id: r.id, url: r.url }; }
@@ -846,7 +846,7 @@ export default function App() {
   const [users, setUsers] = useState({});
   const [products, setProducts] = useState([]);
   const [banners, setBanners] = useState([]);
-  const [settings, setSettings] = useState({ orderEmail: "", orderWhatsapp: "" });
+  const [settings, setSettings] = useState({ orderEmail: "", orderWhatsapp: "", fiscalEmitente: {} });
   const [clients, setClients] = useState([]);
   const [orders, setOrders] = useState([]);
   const [stockItems, setStockItems] = useState([]);
@@ -879,7 +879,7 @@ export default function App() {
     setUsers(finalUsers);
     setProducts((pRows.data || []).map(rowToProduct));
     setBanners((bRows.data || []).map(rowToBanner));
-    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES, colors: sRow.data.colors || [] } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES, colors: [] });
+    setSettings(sRow.data ? { orderEmail: sRow.data.order_email || "", orderWhatsapp: sRow.data.order_whatsapp || "", categories: sRow.data.categories?.length ? sRow.data.categories : DEFAULT_CATEGORIES, colors: sRow.data.colors || [], fiscalEmitente: sRow.data.fiscal_emitente || {} } : { orderEmail: "", orderWhatsapp: "", categories: DEFAULT_CATEGORIES, colors: [], fiscalEmitente: {} });
     setClients((clRows.data || []).map(rowToClient)); setOrders((ordRows.data || []).map(rowToOrder));
     setStockItems((siRows.data || []).map(rowToStockItem));
     setCutBatches((cbRows.data || []).map(rowToCutBatch));
@@ -902,7 +902,7 @@ export default function App() {
   const persistSettings = useCallback(async (next) => {
     setSettings(next);
     try {
-      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES, colors: next.colors || [] });
+      const { error } = await supabase.from("settings").upsert({ id: 1, order_email: next.orderEmail, order_whatsapp: next.orderWhatsapp, categories: next.categories || DEFAULT_CATEGORIES, colors: next.colors || [], fiscal_emitente: next.fiscalEmitente || {} });
       if (error) throw error;
     } catch (e) { console.error("Erro ao salvar configurações:", e); }
   }, []);
@@ -2426,19 +2426,103 @@ function SettingsAdmin({ settings, setSettings }) {
   const [email, setEmail] = useState(settings.orderEmail || "");
   const [whats, setWhats] = useState(settings.orderWhatsapp || "");
   const [saved, setSaved] = useState(false);
-  function save() { setSettings({ orderEmail: email.trim(), orderWhatsapp: whats.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1500); }
+  function save() { setSettings({ ...settings, orderEmail: email.trim(), orderWhatsapp: whats.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1500); }
+
+  const fe = settings.fiscalEmitente || {};
+  const [razaoSocial, setRazaoSocial] = useState(fe.razaoSocial || "");
+  const [nomeFantasia, setNomeFantasia] = useState(fe.nomeFantasia || "");
+  const [cnpj, setCnpj] = useState(fe.cnpj || "");
+  const [ie, setIe] = useState(fe.ie || "");
+  const [regimeTributario, setRegimeTributario] = useState(fe.regimeTributario || "Simples Nacional");
+  const [cep, setCep] = useState(fe.cep || "");
+  const [endereco, setEndereco] = useState(fe.endereco || "");
+  const [cidade, setCidade] = useState(fe.cidade || "");
+  const [uf, setUf] = useState(fe.uf || "");
+  const [telefone, setTelefone] = useState(fe.telefone || "");
+  const [savedFiscal, setSavedFiscal] = useState(false);
+  function saveFiscal() {
+    setSettings({
+      ...settings,
+      fiscalEmitente: {
+        razaoSocial: razaoSocial.trim(), nomeFantasia: nomeFantasia.trim(), cnpj: cnpj.trim(), ie: ie.trim(),
+        regimeTributario, cep: cep.trim(), endereco: endereco.trim(), cidade: cidade.trim(), uf: uf.trim(), telefone: telefone.trim(),
+      },
+    });
+    setSavedFiscal(true); setTimeout(() => setSavedFiscal(false), 1500);
+  }
+
   return (
-    <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 460 }}>
-      <div style={{ fontFamily: "Georgia, serif", fontSize: 17, marginBottom: 4 }}>Recebimento de pedidos</div>
-      <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Sempre que um cliente finalizar um pedido no carrinho, ele poderá enviá-lo com um clique para este e-mail e WhatsApp.</div>
-      <FieldLabel>E-mail para receber pedidos</FieldLabel>
-      <input value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} placeholder="pedidos@suaempresa.com.br" />
-      <FieldLabel>WhatsApp para receber pedidos (com DDI e DDD)</FieldLabel>
-      <input value={whats} onChange={(e) => setWhats(e.target.value)} style={inputStyle} placeholder="55 71 99999-9999" />
-      <button onClick={save} style={{ ...btnPrimary, marginTop: 16 }}><Check size={15} /> Salvar</button>
-      {saved && <span style={{ marginLeft: 10, fontSize: 12, color: TOKENS.ok }}>Salvo!</span>}
-      <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 14, lineHeight: 1.5 }}>
-        Observação: e-mail e WhatsApp são protocolos de texto — não é possível embutir fotos dentro da mensagem em si. Por isso, ao finalizar o pedido, o cliente também pode baixar um PDF ou PNG (com a foto principal de cada peça) para anexar antes de enviar.
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 460 }}>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 17, marginBottom: 4 }}>Recebimento de pedidos</div>
+        <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Sempre que um cliente finalizar um pedido no carrinho, ele poderá enviá-lo com um clique para este e-mail e WhatsApp.</div>
+        <FieldLabel>E-mail para receber pedidos</FieldLabel>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} placeholder="pedidos@suaempresa.com.br" />
+        <FieldLabel>WhatsApp para receber pedidos (com DDI e DDD)</FieldLabel>
+        <input value={whats} onChange={(e) => setWhats(e.target.value)} style={inputStyle} placeholder="55 71 99999-9999" />
+        <button onClick={save} style={{ ...btnPrimary, marginTop: 16 }}><Check size={15} /> Salvar</button>
+        {saved && <span style={{ marginLeft: 10, fontSize: 12, color: TOKENS.ok }}>Salvo!</span>}
+        <div style={{ fontSize: 11, color: TOKENS.graphite, marginTop: 14, lineHeight: 1.5 }}>
+          Observação: e-mail e WhatsApp são protocolos de texto — não é possível embutir fotos dentro da mensagem em si. Por isso, ao finalizar o pedido, o cliente também pode baixar um PDF ou PNG (com a foto principal de cada peça) para anexar antes de enviar.
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 460 }}>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 17, marginBottom: 4 }}>Dados fiscais do emitente</div>
+        <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Dados da empresa que vai emitir a nota fiscal. Preparação para quando a emissão for ativada — por enquanto, nada disso envia nota de verdade.</div>
+
+        <FieldLabel>Razão social</FieldLabel>
+        <input value={razaoSocial} onChange={(e) => setRazaoSocial(e.target.value)} style={inputStyle} placeholder="Ex: Mallo Confecções LTDA" />
+
+        <FieldLabel>Nome fantasia</FieldLabel>
+        <input value={nomeFantasia} onChange={(e) => setNomeFantasia(e.target.value)} style={inputStyle} placeholder="Ex: Mallo" />
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <FieldLabel>CNPJ</FieldLabel>
+            <input value={cnpj} onChange={(e) => setCnpj(e.target.value)} style={inputStyle} placeholder="00.000.000/0000-00" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <FieldLabel>Inscrição estadual</FieldLabel>
+            <input value={ie} onChange={(e) => setIe(e.target.value)} style={inputStyle} placeholder="Ex: 123.456.789" />
+          </div>
+        </div>
+
+        <FieldLabel>Regime tributário</FieldLabel>
+        <select value={regimeTributario} onChange={(e) => setRegimeTributario(e.target.value)} style={inputStyle}>
+          <option>Simples Nacional</option>
+          <option>Lucro Presumido</option>
+          <option>Lucro Real</option>
+          <option>MEI</option>
+        </select>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <FieldLabel>CEP</FieldLabel>
+            <input value={cep} onChange={(e) => setCep(e.target.value)} style={inputStyle} placeholder="00000-000" />
+          </div>
+          <div style={{ flex: 2 }}>
+            <FieldLabel>Endereço</FieldLabel>
+            <input value={endereco} onChange={(e) => setEndereco(e.target.value)} style={inputStyle} placeholder="Rua, número, bairro" />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 2 }}>
+            <FieldLabel>Cidade</FieldLabel>
+            <input value={cidade} onChange={(e) => setCidade(e.target.value)} style={inputStyle} placeholder="Ex: Salvador" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <FieldLabel>UF</FieldLabel>
+            <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase())} style={inputStyle} placeholder="BA" maxLength={2} />
+          </div>
+        </div>
+
+        <FieldLabel>Telefone</FieldLabel>
+        <input value={telefone} onChange={(e) => setTelefone(e.target.value)} style={inputStyle} placeholder="71 99999-9999" />
+
+        <button onClick={saveFiscal} style={{ ...btnPrimary, marginTop: 16 }}><Check size={15} /> Salvar dados fiscais</button>
+        {savedFiscal && <span style={{ marginLeft: 10, fontSize: 12, color: TOKENS.ok }}>Salvo!</span>}
       </div>
     </div>
   );
@@ -4046,7 +4130,7 @@ function ProdutosAdmin({ products, setProducts, stockItems, setStockItems, categ
   const [labelQty, setLabelQty] = useState({ P: 0, M: 0, G: 0, GG: 0 });
   const [generatingLabels, setGeneratingLabels] = useState(false);
 
-  function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: categories[0], description: "", price: "", costPrice: "", variants: [] }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("p_"), model: "", sku: "", category: categories[0], description: "", price: "", costPrice: "", variants: [], ncm: "", cfop: "", unit: "UN", cest: "" }); setShowForm(true); }
   function startEdit(p) { setEditing({ ...p, variants: p.variants.map((v) => ({ ...v, stock: { ...v.stock } })) }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este produto do catálogo?")) setProducts(products.filter((p) => p.id !== id)); }
   // Ao salvar, compara o estoque anterior (editing) com o novo (p), por cor
@@ -4478,6 +4562,29 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
           <FieldLabel>Preço (atacado)</FieldLabel>
           <input value={p.price} onChange={(e) => setP({ ...p, price: e.target.value })} style={inputStyle} placeholder="0,00" />
           <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginTop: 4 }}>O preço de custo é definido separadamente no Painel Central, por quem tem acesso de Admin Central.</div>
+
+          <div style={{ margin: "18px 0 8px" }}>
+            <FieldLabel>Dados fiscais (para nota fiscal)</FieldLabel>
+            <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginBottom: 8 }}>Opcional por enquanto — usado quando a emissão de nota fiscal for ativada.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: TOKENS.graphite, marginBottom: 3 }}>NCM</div>
+                <input value={p.ncm || ""} onChange={(e) => setP({ ...p, ncm: e.target.value })} style={inputStyle} placeholder="Ex: 6109.10.00" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: TOKENS.graphite, marginBottom: 3 }}>CFOP</div>
+                <input value={p.cfop || ""} onChange={(e) => setP({ ...p, cfop: e.target.value })} style={inputStyle} placeholder="Ex: 5101" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: TOKENS.graphite, marginBottom: 3 }}>Unidade</div>
+                <input value={p.unit || "UN"} onChange={(e) => setP({ ...p, unit: e.target.value })} style={inputStyle} placeholder="UN" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: TOKENS.graphite, marginBottom: 3 }}>CEST</div>
+                <input value={p.cest || ""} onChange={(e) => setP({ ...p, cest: e.target.value })} style={inputStyle} placeholder="Opcional" />
+              </div>
+            </div>
+          </div>
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "18px 0 8px" }}>
             <FieldLabel>Cores e fotos por cor</FieldLabel>
