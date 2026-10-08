@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown, Search
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -192,6 +192,7 @@ async function syncTable(table, idField, rows) {
   const { error: delError } = await del;
   if (delError) throw delError;
 }
+function normalizeSearch(str) { return String(str || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim(); }
 function parseBRL(str) { const n = parseFloat(String(str || "0").replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; }
 function formatBRL(n) { return n.toFixed(2).replace(".", ","); }
 
@@ -1662,6 +1663,14 @@ function CatalogView({ products, banners, session, addToCart, cart, commitCartCh
   const showPrice = session.role === "admin" || session.role === "admincentral" || session.role === "representante" || session.access === "atacado";
   const [activeGroup, setActiveGroup] = useState("Todas");
   const [activeCat, setActiveCat] = useState("Todas");
+  const [search, setSearch] = useState("");
+  const searching = search.trim().length > 0;
+
+  const searchResults = useMemo(() => {
+    if (!searching) return [];
+    const term = normalizeSearch(search);
+    return products.filter((p) => normalizeSearch(p.model).includes(term) || normalizeSearch(p.sku).includes(term));
+  }, [searching, search, products]);
 
   const presentCats = categories.filter((cat) => products.some((p) => p.category === cat));
 
@@ -1698,20 +1707,50 @@ function CatalogView({ products, banners, session, addToCart, cart, commitCartCh
           {!showPrice && <div style={{ fontSize: 12, color: TOKENS.graphite, fontStyle: "italic" }}>Preços disponíveis para login atacado</div>}
         </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingBottom: groupNames.length || hasOutras ? 10 : 16, marginBottom: groupNames.length || hasOutras ? 10 : 26, borderBottom: groupNames.length || hasOutras ? "none" : `1px solid ${TOKENS.line}` }}>
-          <CategoryPill active={activeGroup === "Todas"} onClick={() => selectGroup("Todas")}>Todas</CategoryPill>
-          {groupNames.map((g) => <CategoryPill key={g} active={activeGroup === g} onClick={() => selectGroup(g)}>{g}</CategoryPill>)}
-          {hasOutras && <CategoryPill active={activeGroup === "__outras__"} onClick={() => selectGroup("__outras__")}>Outras</CategoryPill>}
+        <div style={{ position: "relative", marginBottom: 20, maxWidth: 420 }}>
+          <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: TOKENS.graphite }} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por nome do modelo ou SKU..."
+            style={{ ...inputStyle, paddingLeft: 36, paddingRight: search ? 34 : 12 }}
+          />
+          {search && (
+            <button onClick={() => setSearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: TOKENS.graphite, display: "flex" }}>
+              <X size={15} />
+            </button>
+          )}
         </div>
 
-        {activeGroup !== "Todas" && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${TOKENS.line}`, paddingBottom: 16, marginBottom: 26 }}>
-            <CategoryPill active={activeCat === "Todas"} onClick={() => setActiveCat("Todas")}>Todas</CategoryPill>
-            {subcats.map((cat) => <CategoryPill key={cat} active={activeCat === cat} onClick={() => setActiveCat(cat)}>{cat}</CategoryPill>)}
-          </div>
+        {!searching && (
+          <>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingBottom: groupNames.length || hasOutras ? 10 : 16, marginBottom: groupNames.length || hasOutras ? 10 : 26, borderBottom: groupNames.length || hasOutras ? "none" : `1px solid ${TOKENS.line}` }}>
+              <CategoryPill active={activeGroup === "Todas"} onClick={() => selectGroup("Todas")}>Todas</CategoryPill>
+              {groupNames.map((g) => <CategoryPill key={g} active={activeGroup === g} onClick={() => selectGroup(g)}>{g}</CategoryPill>)}
+              {hasOutras && <CategoryPill active={activeGroup === "__outras__"} onClick={() => selectGroup("__outras__")}>Outras</CategoryPill>}
+            </div>
+
+            {activeGroup !== "Todas" && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderBottom: `1px solid ${TOKENS.line}`, paddingBottom: 16, marginBottom: 26 }}>
+                <CategoryPill active={activeCat === "Todas"} onClick={() => setActiveCat("Todas")}>Todas</CategoryPill>
+                {subcats.map((cat) => <CategoryPill key={cat} active={activeCat === cat} onClick={() => setActiveCat(cat)}>{cat}</CategoryPill>)}
+              </div>
+            )}
+          </>
         )}
 
-        {products.length === 0 ? (
+        {searching ? (
+          <>
+            <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 16 }}>{searchResults.length} resultado{searchResults.length === 1 ? "" : "s"} para "{search}"</div>
+            {searchResults.length === 0 ? (
+              <div style={{ color: TOKENS.graphite, padding: 40, textAlign: "center" }}>Nenhum modelo encontrado com esse nome ou SKU.</div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 22 }}>
+                {searchResults.map((p) => <ProductCard key={p.id} p={p} showPrice={showPrice} addToCart={addToCart} cart={cart} commitCartChanges={commitCartChanges} />)}
+              </div>
+            )}
+          </>
+        ) : products.length === 0 ? (
           <div style={{ color: TOKENS.graphite, padding: 40, textAlign: "center" }}>Nenhum modelo cadastrado ainda.</div>
         ) : filtered.length === 0 ? (
           <div style={{ color: TOKENS.graphite, padding: 40, textAlign: "center" }}>Nenhum modelo nesta categoria ainda.</div>
