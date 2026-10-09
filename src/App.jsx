@@ -865,16 +865,47 @@ async function buscarCEP(cepDigits) {
     return data;
   } catch { return null; }
 }
-async function buscarCNPJ(cnpjClean) {
+async function fetchComTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
   try {
-    // cnpjClean: 14 caracteres alfanuméricos (sem pontuação), o novo CNPJ
-    // alfanumérico ainda pode não estar disponível em todo provedor da
-    // BrasilAPI — se não achar, a função só retorna null e o preenchimento
-    // automático simplesmente não acontece (o usuário preenche à mão).
-    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjClean}`);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; }
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function buscarCNPJ(cnpjClean) {
+  // cnpjClean: 14 caracteres alfanuméricos (sem pontuação). Tenta a BrasilAPI
+  // primeiro; se ela não responder (indisponível, lenta, ou ainda sem suporte
+  // ao novo CNPJ alfanumérico) e o CNPJ for do formato clássico (só números),
+  // tenta a ReceitaWS como segunda opção antes de desistir. Nunca trava —
+  // cada tentativa tem um limite de 8s — e se nenhuma achar, retorna null e
+  // quem chamou mostra que não achou, pra digitação manual.
+  try {
+    const res = await fetchComTimeout(`https://brasilapi.com.br/api/cnpj/v1/${cnpjClean}`, 8000);
+    if (res.ok) return await res.json();
+  } catch {}
+  if (/^[0-9]{14}$/.test(cnpjClean)) {
+    try {
+      const res2 = await fetchComTimeout(`https://www.receitaws.com.br/v1/cnpj/${cnpjClean}`, 8000);
+      if (res2.ok) {
+        const d = await res2.json();
+        if (d && d.status !== "ERROR") {
+          return {
+            razao_social: d.nome,
+            nome_fantasia: d.fantasia,
+            cep: d.cep,
+            logradouro: d.logradouro,
+            numero: d.numero,
+            bairro: d.bairro,
+            municipio: d.municipio,
+            uf: d.uf,
+          };
+        }
+      }
+    } catch {}
+  }
+  return null;
 }
 
 export default function App() {
@@ -3161,6 +3192,7 @@ function RepresentantesAdmin({ users, orders, setOrders, repSettings, persistRep
 function ClientForm({ initial, onCancel, onSave }) {
   const [c, setC] = useState(initial);
   const [buscando, setBuscando] = useState("");
+  const [cnpjNaoEncontrado, setCnpjNaoEncontrado] = useState(false);
   const [cnpjInvalido, setCnpjInvalido] = useState(false);
   const [erros, setErros] = useState({});
 
@@ -3168,6 +3200,7 @@ function ClientForm({ initial, onCancel, onSave }) {
     const masked = maskCNPJ(value);
     setC((s) => ({ ...s, cnpj: masked }));
     const clean = masked.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    setCnpjNaoEncontrado(false);
     if (clean.length === 14) {
       if (!isValidCNPJ(clean)) { setCnpjInvalido(true); return; }
       setCnpjInvalido(false);
@@ -3181,6 +3214,8 @@ function ClientForm({ initial, onCancel, onSave }) {
           cep: s.cep || (dados.cep ? maskCEP(String(dados.cep)) : s.cep),
           address: s.address || [dados.logradouro, dados.numero, dados.bairro, dados.municipio, dados.uf].filter(Boolean).join(", "),
         }));
+      } else {
+        setCnpjNaoEncontrado(true);
       }
     } else {
       setCnpjInvalido(false);
@@ -3242,6 +3277,8 @@ function ClientForm({ initial, onCancel, onSave }) {
                 )}
                 {f.key === "cnpj" && cnpjInvalido ? (
                   <div style={{ fontSize: 11, color: "#A5453F", marginTop: 2, marginBottom: 4 }}>Esse CNPJ não é válido — confira os números.</div>
+                ) : f.key === "cnpj" && cnpjNaoEncontrado ? (
+                  <div style={{ fontSize: 11, color: "#B8862E", marginTop: 2, marginBottom: 4 }}>Não encontramos esse CNPJ nas bases públicas — preencha os dados abaixo manualmente.</div>
                 ) : comErro && <div style={{ fontSize: 11, color: "#A5453F", marginTop: 2, marginBottom: 4 }}>Este campo é obrigatório.</div>}
               </div>
             );
