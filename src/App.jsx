@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown, Search
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown, Search, ChevronUp, Star
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -5027,6 +5027,29 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
   function addVariant() { setP((s) => ({ ...s, variants: [...s.variants, { id: uid("v_"), color: "", hex: "#8C3A3A", images: [], stock: { P: 0, M: 0, G: 0, GG: 0 } }] })); }
   function removeVariant(id) { setP((s) => ({ ...s, variants: s.variants.filter((v) => v.id !== id) })); }
   function updateVariant(id, patch) { setP((s) => ({ ...s, variants: s.variants.map((v) => v.id === id ? { ...v, ...patch } : v) })); }
+  // Organizador de cores: a ordem de "variants" decide qual cor aparece
+  // primeiro na vitrine (a cor na posição 0 é a exibida por padrão).
+  function moveVariant(id, dir) {
+    setP((s) => {
+      const idx = s.variants.findIndex((v) => v.id === id);
+      const newIdx = idx + dir;
+      if (idx === -1 || newIdx < 0 || newIdx >= s.variants.length) return s;
+      const next = [...s.variants];
+      const [item] = next.splice(idx, 1);
+      next.splice(newIdx, 0, item);
+      return { ...s, variants: next };
+    });
+  }
+  function moveVariantToFirst(id) {
+    setP((s) => {
+      const idx = s.variants.findIndex((v) => v.id === id);
+      if (idx <= 0) return s;
+      const next = [...s.variants];
+      const [item] = next.splice(idx, 1);
+      next.unshift(item);
+      return { ...s, variants: next };
+    });
+  }
   function setVariantStock(id, size, val) { setP((s) => ({ ...s, variants: s.variants.map((v) => v.id === id ? { ...v, stock: { ...v.stock, [size]: Math.max(0, Number(val) || 0) } } : v) })); }
   // Kits são vendidos fechados, sempre na proporção 1 P / 2 M / 2 G / 1 GG.
   // Em vez de digitar os 4 tamanhos, digita quantos kits e o estoque por
@@ -5101,13 +5124,22 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
             <FieldLabel>Cores e fotos por cor</FieldLabel>
             <button onClick={addVariant} style={btnGhostSmall}><Plus size={13} /> Adicionar cor</button>
           </div>
+          {p.variants.length > 1 && (
+            <div style={{ fontSize: 10.5, color: TOKENS.graphite, marginBottom: 8, marginTop: -4 }}>
+              Use as setas pra reordenar — a 1ª cor da lista é a que aparece primeiro na vitrine.
+            </div>
+          )}
 
           {p.variants.length === 0 && <div style={{ fontSize: 12, color: TOKENS.graphite, padding: 12, background: TOKENS.ivorySoft, borderRadius: 3 }}>Nenhuma cor adicionada. Cadastre pelo menos uma cor com suas fotos e estoque.</div>}
 
-          {p.variants.map((v) => (
+          {p.variants.map((v, i) => (
             <VariantEditor key={v.id} v={v} colors={colors} category={p.category}
+              isFirst={i === 0} isLast={i === p.variants.length - 1}
               onChange={(patch) => updateVariant(v.id, patch)}
               onRemove={() => removeVariant(v.id)}
+              onMoveUp={() => moveVariant(v.id, -1)}
+              onMoveDown={() => moveVariant(v.id, 1)}
+              onMakeFirst={() => moveVariantToFirst(v.id)}
               onAddImages={(files) => addVariantImages(v.id, files, v.images)}
               onRemoveImage={(idx) => removeVariantImage(v.id, idx, v.images)}
               onSetStock={(size, val) => setVariantStock(v.id, size, val)}
@@ -5124,7 +5156,7 @@ function ProductForm({ initial, categories, colors, garantirCorNoCatalogo, onCan
   );
 }
 
-function VariantEditor({ v, colors, category, onChange, onRemove, onAddImages, onRemoveImage, onSetStock, onSetKitQty }) {
+function VariantEditor({ v, colors, category, isFirst, isLast, onChange, onRemove, onMoveUp, onMoveDown, onMakeFirst, onAddImages, onRemoveImage, onSetStock, onSetKitQty }) {
   const fileRef = useRef();
   const isKit = category === "KIT'S";
   // Kit fechado: 1 P / 2 M / 2 G / 1 GG por unidade. Deduz quantos kits já
@@ -5135,6 +5167,15 @@ function VariantEditor({ v, colors, category, onChange, onRemove, onAddImages, o
     <div style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 14, marginBottom: 12, background: TOKENS.ivorySoft }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <button onClick={onMoveUp} disabled={isFirst} title="Mover para cima" style={{ ...iconBtnStyle, width: 20, height: 18, padding: 0, opacity: isFirst ? 0.3 : 1, cursor: isFirst ? "default" : "pointer" }}><ChevronUp size={14} /></button>
+            <button onClick={onMoveDown} disabled={isLast} title="Mover para baixo" style={{ ...iconBtnStyle, width: 20, height: 18, padding: 0, opacity: isLast ? 0.3 : 1, cursor: isLast ? "default" : "pointer" }}><ChevronDown size={14} /></button>
+          </div>
+          {isFirst ? (
+            <span title="Esta é a cor exibida primeiro na vitrine" style={{ color: TOKENS.wine, display: "flex" }}><Star size={15} fill={TOKENS.wine} /></span>
+          ) : (
+            <button onClick={onMakeFirst} title="Tornar esta a 1ª cor (exibida por padrão na vitrine)" style={{ ...iconBtnStyle, color: TOKENS.graphite }}><Star size={15} /></button>
+          )}
           <input type="color" value={v.hex} onChange={(e) => onChange({ hex: e.target.value })} style={{ width: 34, height: 34, border: "none", padding: 0, background: "none", cursor: "pointer", borderRadius: "50%" }} />
           <input value={v.color} onChange={(e) => onChange({ color: e.target.value.toUpperCase() })} placeholder="Nome da cor (ex: VERMELHO)" style={{ ...inputStyle, maxWidth: 220 }} />
           {colors?.length > 0 && (
