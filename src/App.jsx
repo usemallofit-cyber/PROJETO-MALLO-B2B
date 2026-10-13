@@ -206,7 +206,25 @@ async function syncTable(table, idField, rows) {
   if (delError) throw delError;
 }
 function normalizeSearch(str) { return String(str || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim(); }
-function parseBRL(str) { const n = parseFloat(String(str || "0").replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; }
+// Lê tanto "82,50" / "1.234,56" (formato BR, vírgula decimal) quanto "82.5"
+// (ponto decimal "cru", como fica se alguém digita o preço com ponto em vez
+// de vírgula) — antes, qualquer ponto era tratado como separador de milhar e
+// "82.5" virava 825. Só trata o ponto como separador de milhar quando não há
+// vírgula E sobram exatamente 3 dígitos depois dele (ex: "1.234" → 1234).
+function parseBRL(str) {
+  let s = String(str ?? "0").trim();
+  if (s === "") return 0;
+  if (s.includes(",")) {
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else {
+    const lastDot = s.lastIndexOf(".");
+    if (lastDot !== -1 && s.length - lastDot - 1 === 3) {
+      s = s.replace(/\./g, "");
+    }
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
 function formatBRL(n) { return n.toFixed(2).replace(".", ","); }
 
 async function fileToCompressedDataUrl(file, maxW = 900, quality = 0.72) {
