@@ -459,11 +459,14 @@ function buildEplLabels(entries, gapDots = 24) {
         const modelRaw = (e.model || "").replace(/["\\]/g, "").toUpperCase();
         const color = (e.color || "").replace(/["\\]/g, "").toUpperCase();
         const size = (e.size || "").replace(/["\\]/g, "").toUpperCase();
-        // Nome e cor numa linha só ("MODELO - COR"), em fonte 1 (menor que a
-        // fonte 2 usada antes só pro nome) pra caber mais caracteres — a
-        // etiqueta só tem 264 dots (33mm) de largura, então corta em ~34
-        // caracteres pra nunca estourar a borda.
-        const nameColor = `${modelRaw}${color ? ` - ${color}` : ""}`.slice(0, 34);
+        // Nome e cor numa linha só ("MODELO - COR"). Na primeira versão eu
+        // tinha estimado a largura da fonte pequena otimista demais (7
+        // dots/caractere) e a linha estourou a borda da etiqueta, vazando
+        // pra etiqueta vizinha na impressão real. Agora uso o mesmo limite
+        // que o nome sozinho já usava antes (24 caracteres a ~11 dots cada),
+        // que já era comprovadamente seguro nos 264 dots (33mm) de largura —
+        // se o nome for grande, a cor pode acabar ficando de fora.
+        const nameColor = `${modelRaw}${color ? ` - ${color}` : ""}`.slice(0, 24);
         // Barra centralizada de verdade dentro da etiqueta, calculando a
         // largura real que ela vai sair impressa.
         const barW = estimateBarcodeWidthDots(code, narrowBar);
@@ -476,7 +479,7 @@ function buildEplLabels(entries, gapDots = 24) {
         // inteira, a barra também subiu mais ~2mm em relação à versão
         // anterior (pedido do usuário), com folga de sobra nos dois lados.
         const yTop = yBase + 20;
-        const nameX = eplCenterX(xBase, LABEL_W, nameColor, 7);
+        const nameX = eplCenterX(xBase, LABEL_W, nameColor, 11);
         out += `A${nameX},${yTop},0,1,1,1,N,"${nameColor}"\n`;
         // Tamanho da peça (P/M/G/GG), centralizado e um pouco mais pra baixo.
         const sizeMult = 2;
