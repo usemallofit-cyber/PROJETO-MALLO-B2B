@@ -456,34 +456,36 @@ function buildEplLabels(entries, gapDots = 24) {
       rowEntries.forEach((e, col) => {
         const xBase = col * (LABEL_W + gapDots) + margin;
         const code = (e.code || "").replace(/["\\]/g, "").toUpperCase();
-        const model = (e.model || "").replace(/["\\]/g, "").slice(0, 24).toUpperCase();
+        const modelRaw = (e.model || "").replace(/["\\]/g, "").toUpperCase();
         const color = (e.color || "").replace(/["\\]/g, "").toUpperCase();
         const size = (e.size || "").replace(/["\\]/g, "").toUpperCase();
+        // Nome e cor numa linha só ("MODELO - COR"), em fonte 1 (menor que a
+        // fonte 2 usada antes só pro nome) pra caber mais caracteres — a
+        // etiqueta só tem 264 dots (33mm) de largura, então corta em ~34
+        // caracteres pra nunca estourar a borda.
+        const nameColor = `${modelRaw}${color ? ` - ${color}` : ""}`.slice(0, 34);
         // Barra centralizada de verdade dentro da etiqueta, calculando a
         // largura real que ela vai sair impressa.
         const barW = estimateBarcodeWidthDots(code, narrowBar);
         const barX = Math.max(xBase, xBase + Math.round((LABEL_W - barW) / 2));
-        // Bloco inteiro (nome, cor, tamanho, barra, código) deslocado 9 dots
-        // pra baixo em relação ao layout original, pra ficar centralizado de
-        // verdade dentro dos 168 dots de altura da etiqueta — antes o
-        // conteúdo começava quase colado no topo (4 dots) e terminava quase
-        // colado no vão de corte de baixo (só ~5mm de folga), então um
+        // Bloco inteiro (nome+cor, tamanho, barra, código) centralizado nos
+        // 168 dots de altura da etiqueta — antes o conteúdo ficava quase
+        // colado no topo e quase colado no vão de corte de baixo, então um
         // pequeno desalinhamento no corte/descolamento cortava a barra ou o
-        // código. Agora sobra margem parecida em cima e embaixo (~13 dots,
-        // ~1,6mm) nos dois lados.
-        const yTop = yBase + 13;
-        // Nome do modelo: fonte um pouco maior (fonte 2 em vez de 1) e centralizado.
-        const nameX = eplCenterX(xBase, LABEL_W, model, 11);
-        out += `A${nameX},${yTop},0,2,1,1,N,"${model}"\n`;
-        out += `A${xBase},${yTop + 16},0,1,1,1,N,"${color}"\n`;
+        // código. Como juntar nome+cor numa linha só economizou uma linha
+        // inteira, a barra também subiu mais ~2mm em relação à versão
+        // anterior (pedido do usuário), com folga de sobra nos dois lados.
+        const yTop = yBase + 20;
+        const nameX = eplCenterX(xBase, LABEL_W, nameColor, 7);
+        out += `A${nameX},${yTop},0,1,1,1,N,"${nameColor}"\n`;
         // Tamanho da peça (P/M/G/GG), centralizado e um pouco mais pra baixo.
         const sizeMult = 2;
         const sizeX = eplCenterX(xBase, LABEL_W, size, 9 * sizeMult);
-        out += `A${sizeX},${yTop + 38},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
-        out += `B${barX},${yTop + 82},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
+        out += `A${sizeX},${yTop + 24},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
+        out += `B${barX},${yTop + 52},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
         // Código embaixo, também centralizado (fonte 2, ~11pt por caractere).
         const codeX = eplCenterX(xBase, LABEL_W, code, 11);
-        out += `A${codeX},${yTop + 124},0,2,1,1,N,"${code}"\n`;
+        out += `A${codeX},${yTop + 96},0,2,1,1,N,"${code}"\n`;
       });
     });
     out += `P1\n`;
