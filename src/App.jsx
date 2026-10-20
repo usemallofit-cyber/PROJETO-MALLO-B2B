@@ -187,6 +187,28 @@ async function withRetry(fn) {
   return lastResult;
 }
 
+// stock_items já passa de milhares de linhas (uma por peça rastreada) e só
+// tende a crescer. O PostgREST, por padrão, devolve no máximo ~1000 linhas
+// num select sem paginação — sem erro nenhum, só corta silenciosamente o
+// resto. Isso fazia o app carregar só uma fração do estoque real: produtos
+// cujas peças caíam fora dessa primeira página pareciam "sem peça
+// rastreada" (ex.: geração de etiquetas falhando mesmo com estoque
+// cadastrado). Por isso aqui pagina em blocos de 1000 até não vir mais nada.
+async function fetchAllStockItems() {
+  const PAGE = 1000;
+  let all = [];
+  let from = 0;
+  while (true) {
+    const res = await withRetry(() => supabase.from("stock_items").select("*").range(from, from + PAGE - 1));
+    if (res.error) return res;
+    const rows = res.data || [];
+    all = all.concat(rows);
+    if (rows.length < PAGE) break;
+    from += PAGE;
+  }
+  return { data: all, error: null };
+}
+
 // Sincroniza uma tabela inteira com a lista de linhas desejada: grava
 // (upsert) todas as linhas da lista e apaga do banco qualquer linha que não
 // esteja mais nela. Seguro para tabelas onde quem escreve sempre enxerga a
@@ -958,7 +980,7 @@ export default function App() {
       withRetry(() => supabase.from("settings").select("*").eq("id", 1).maybeSingle()),
       withRetry(() => supabase.from("clients").select("*")),
       withRetry(() => supabase.from("orders").select("*")),
-      withRetry(() => supabase.from("stock_items").select("*")),
+      fetchAllStockItems(),
       withRetry(() => supabase.from("cut_batches").select("*")),
       withRetry(() => supabase.from("rep_settings").select("*")),
       withRetry(() => supabase.from("rep_goals").select("*")),
