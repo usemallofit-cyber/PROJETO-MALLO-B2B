@@ -463,18 +463,27 @@ function buildEplLabels(entries, gapDots = 24) {
         // largura real que ela vai sair impressa.
         const barW = estimateBarcodeWidthDots(code, narrowBar);
         const barX = Math.max(xBase, xBase + Math.round((LABEL_W - barW) / 2));
+        // Bloco inteiro (nome, cor, tamanho, barra, código) deslocado 9 dots
+        // pra baixo em relação ao layout original, pra ficar centralizado de
+        // verdade dentro dos 168 dots de altura da etiqueta — antes o
+        // conteúdo começava quase colado no topo (4 dots) e terminava quase
+        // colado no vão de corte de baixo (só ~5mm de folga), então um
+        // pequeno desalinhamento no corte/descolamento cortava a barra ou o
+        // código. Agora sobra margem parecida em cima e embaixo (~13 dots,
+        // ~1,6mm) nos dois lados.
+        const yTop = yBase + 13;
         // Nome do modelo: fonte um pouco maior (fonte 2 em vez de 1) e centralizado.
         const nameX = eplCenterX(xBase, LABEL_W, model, 11);
-        out += `A${nameX},${yBase + 4},0,2,1,1,N,"${model}"\n`;
-        out += `A${xBase},${yBase + 20},0,1,1,1,N,"${color}"\n`;
+        out += `A${nameX},${yTop},0,2,1,1,N,"${model}"\n`;
+        out += `A${xBase},${yTop + 16},0,1,1,1,N,"${color}"\n`;
         // Tamanho da peça (P/M/G/GG), centralizado e um pouco mais pra baixo.
         const sizeMult = 2;
         const sizeX = eplCenterX(xBase, LABEL_W, size, 9 * sizeMult);
-        out += `A${sizeX},${yBase + 42},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
-        out += `B${barX},${yBase + 86},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
+        out += `A${sizeX},${yTop + 38},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
+        out += `B${barX},${yTop + 82},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
         // Código embaixo, também centralizado (fonte 2, ~11pt por caractere).
         const codeX = eplCenterX(xBase, LABEL_W, code, 11);
-        out += `A${codeX},${yBase + 128},0,2,1,1,N,"${code}"\n`;
+        out += `A${codeX},${yTop + 124},0,2,1,1,N,"${code}"\n`;
       });
     });
     out += `P1\n`;
