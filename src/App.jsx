@@ -426,6 +426,25 @@ function eplCenterX(xBase, labelW, text, charW) {
   return Math.max(xBase, xBase + Math.round((labelW - w) / 2));
 }
 
+// Quebra um texto em várias linhas de até maxChars, cortando por palavra
+// inteira (sem cortar no meio de uma palavra) — e, se uma palavra sozinha
+// for maior que maxChars, só aí corta ela mesmo, pra nunca estourar a
+// largura da etiqueta.
+function wrapEplText(text, maxChars) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = "";
+  words.forEach((w) => {
+    const candidate = cur ? `${cur} ${w}` : w;
+    if (candidate.length <= maxChars) { cur = candidate; return; }
+    if (cur) lines.push(cur);
+    if (w.length <= maxChars) { cur = w; }
+    else { for (let i = 0; i < w.length; i += maxChars) lines.push(w.slice(i, i + maxChars)); cur = ""; }
+  });
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [""];
+}
+
 function buildEplLabels(entries, gapDots = 24) {
   const DPMM = 8; // 203dpi = 8 pontos por mm
   const LABEL_W = Math.round(33 * DPMM); // 264
@@ -459,14 +478,14 @@ function buildEplLabels(entries, gapDots = 24) {
         const modelRaw = (e.model || "").replace(/["\\]/g, "").toUpperCase();
         const color = (e.color || "").replace(/["\\]/g, "").toUpperCase();
         const size = (e.size || "").replace(/["\\]/g, "").toUpperCase();
-        // Nome e cor numa linha só ("MODELO - COR"). Na primeira versão eu
-        // tinha estimado a largura da fonte pequena otimista demais (7
-        // dots/caractere) e a linha estourou a borda da etiqueta, vazando
-        // pra etiqueta vizinha na impressão real. Agora uso o mesmo limite
-        // que o nome sozinho já usava antes (24 caracteres a ~11 dots cada),
-        // que já era comprovadamente seguro nos 264 dots (33mm) de largura —
-        // se o nome for grande, a cor pode acabar ficando de fora.
-        const nameColor = `${modelRaw}${color ? ` - ${color}` : ""}`.slice(0, 24);
+        // Nome em cima, cor embaixo, cada um na sua linha — com quebra
+        // automática do nome (por palavra inteira) se ele não couber em 24
+        // caracteres (a largura máxima comprovadamente segura nos 264 dots
+        // de etiqueta), em vez de cortar ou deixar vazar pra etiqueta
+        // vizinha. No máximo 3 linhas ao todo (nome + cor), pra não estourar
+        // a altura da etiqueta num nome muito grande.
+        const nameLines = wrapEplText(modelRaw, 24);
+        const lines = (color ? [...nameLines, color] : nameLines).slice(0, 3);
         // Barra centralizada de verdade dentro da etiqueta, calculando a
         // largura real que ela vai sair impressa.
         const barW = estimateBarcodeWidthDots(code, narrowBar);
@@ -475,20 +494,23 @@ function buildEplLabels(entries, gapDots = 24) {
         // 168 dots de altura da etiqueta — antes o conteúdo ficava quase
         // colado no topo e quase colado no vão de corte de baixo, então um
         // pequeno desalinhamento no corte/descolamento cortava a barra ou o
-        // código. Como juntar nome+cor numa linha só economizou uma linha
-        // inteira, a barra também subiu mais ~2mm em relação à versão
-        // anterior (pedido do usuário), com folga de sobra nos dois lados.
-        const yTop = yBase + 20;
-        const nameX = eplCenterX(xBase, LABEL_W, nameColor, 11);
-        out += `A${nameX},${yTop},0,1,1,1,N,"${nameColor}"\n`;
+        // código. O resto do bloco desce conforme o número de linhas de
+        // nome+cor usadas, pra sempre sobrar folga em cima e embaixo.
+        const LINE_H = 14;
+        const yTop = yBase + 10;
+        const extra = (lines.length - 1) * LINE_H;
+        lines.forEach((line, i) => {
+          const lineX = eplCenterX(xBase, LABEL_W, line, 11);
+          out += `A${lineX},${yTop + i * LINE_H},0,1,1,1,N,"${line}"\n`;
+        });
         // Tamanho da peça (P/M/G/GG), centralizado e um pouco mais pra baixo.
         const sizeMult = 2;
         const sizeX = eplCenterX(xBase, LABEL_W, size, 9 * sizeMult);
-        out += `A${sizeX},${yTop + 24},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
-        out += `B${barX},${yTop + 52},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
+        out += `A${sizeX},${yTop + 24 + extra},0,1,${sizeMult},${sizeMult},N,"${size}"\n`;
+        out += `B${barX},${yTop + 52 + extra},0,1B,${narrowBar},1,${barHeight},N,"${code}"\n`;
         // Código embaixo, também centralizado (fonte 2, ~11pt por caractere).
         const codeX = eplCenterX(xBase, LABEL_W, code, 11);
-        out += `A${codeX},${yTop + 96},0,2,1,1,N,"${code}"\n`;
+        out += `A${codeX},${yTop + 96 + extra},0,2,1,1,N,"${code}"\n`;
       });
     });
     out += `P1\n`;
