@@ -406,7 +406,8 @@ function downloadCsvFile(text, filename) {
 }
 
 // "gapDots" é a distância entre etiquetas na bobina — ajuste se a etiqueta
-// sair descolocada (cada etiqueta física normalmente tem uns 2-3mm de vão).
+// sair descolocada. A bobina usada (33x21mm) tem 4mm de vão real entre
+// cada etiqueta.
 // Estimativa de largura (em pontos/dots) que um código CODE128 vai ocupar
 // impresso, pra poder centralizar de verdade — a impressora não deixa a
 // gente perguntar a largura final, então calculamos pela regra do próprio
@@ -445,7 +446,7 @@ function wrapEplText(text, maxChars) {
   return lines.length ? lines : [""];
 }
 
-function buildEplLabels(entries, gapDots = 24) {
+function buildEplLabels(entries, gapDots = 32) {
   const DPMM = 8; // 203dpi = 8 pontos por mm
   const LABEL_W = Math.round(33 * DPMM); // 264
   const LABEL_H = Math.round(21 * DPMM); // 168
