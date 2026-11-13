@@ -4,7 +4,7 @@ import {
   Lock, User, Upload, Plus, Trash2, Pencil, LogOut, Image as ImageIcon, Copy, Check,
   Package, Users, GalleryHorizontal, ChevronLeft, ChevronRight, X, ShieldCheck, Eye,
   ShoppingCart, Minus, Mail, MessageCircle, Printer, Settings as SettingsIcon, Download,
-  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown, Search, ChevronUp, Star
+  Building2, UserCheck, TrendingUp, PieChart, Archive, BarChart3, Crown, UserCog, ListOrdered, ScanBarcode, Scissors, ChevronDown, Search, ChevronUp, Star, FileText
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -71,12 +71,15 @@ function clientToRow(c) {
   return { id: c.id, buyer_name: c.buyerName, cnpj: c.cnpj || null, cpf: c.cpf || null, ie: c.ie || null,
     email: c.email || null, phone: c.phone || null, address: c.address || null, instagram: c.instagram || null,
     client_references: c.references || null, rep_username: c.repUsername || null, cep: c.cep || null, whatsapp: c.whatsapp || null,
-    razao_social: c.razaoSocial || null };
+    razao_social: c.razaoSocial || null, logradouro: c.logradouro || null, numero: c.numero || null,
+    complemento: c.complemento || null, bairro: c.bairro || null, cidade: c.cidade || null, uf: c.uf || null,
+    codigo_ibge: c.codigoIbge || null };
 }
 function rowToClient(r) {
   return { id: r.id, buyerName: r.buyer_name, cnpj: r.cnpj, cpf: r.cpf, ie: r.ie, email: r.email, phone: r.phone,
     address: r.address, instagram: r.instagram, references: r.client_references, repUsername: r.rep_username, cep: r.cep, whatsapp: r.whatsapp,
-    razaoSocial: r.razao_social };
+    razaoSocial: r.razao_social, logradouro: r.logradouro || "", numero: r.numero || "", complemento: r.complemento || "",
+    bairro: r.bairro || "", cidade: r.cidade || "", uf: r.uf || "", codigoIbge: r.codigo_ibge || "" };
 }
 
 function orderToRow(o) {
@@ -84,14 +87,22 @@ function orderToRow(o) {
     seller_username: o.sellerUsername, items: o.items || [], status: o.status, status_log: o.statusLog || [],
     collected_by: o.collectedBy || null, collected_at: o.collectedAt || null, note: o.note || null,
     commission_pct: o.commissionPct === "" || o.commissionPct === undefined ? null : o.commissionPct,
-    payment_condition: o.paymentCondition || null };
+    payment_condition: o.paymentCondition || null, client_id: o.clientId || null,
+    nfe_status: o.nfeStatus || null, nfe_invoice_id: o.nfeInvoiceId || null, nfe_chave: o.nfeChave || null,
+    nfe_numero: o.nfeNumero || null, nfe_pdf_url: o.nfePdfUrl || null, nfe_xml_url: o.nfeXmlUrl || null,
+    nfe_erro: o.nfeErro || null, nfe_ambiente: o.nfeAmbiente || null, nfe_emitida_em: o.nfeEmitidaEm || null,
+    nfe_cancel_motivo: o.nfeCancelMotivo || null };
 }
 function rowToOrder(r) {
   return { id: r.id, date: r.date, clientName: r.client_name, sellerName: r.seller_name, sellerRole: r.seller_role,
     sellerUsername: r.seller_username, items: r.items || [], status: r.status, statusLog: r.status_log || [],
     collectedBy: r.collected_by, collectedAt: r.collected_at, note: r.note,
     commissionPct: r.commission_pct === null || r.commission_pct === undefined ? "" : r.commission_pct,
-    paymentCondition: r.payment_condition || null };
+    paymentCondition: r.payment_condition || null, clientId: r.client_id || null,
+    nfeStatus: r.nfe_status || null, nfeInvoiceId: r.nfe_invoice_id || null, nfeChave: r.nfe_chave || null,
+    nfeNumero: r.nfe_numero || null, nfePdfUrl: r.nfe_pdf_url || null, nfeXmlUrl: r.nfe_xml_url || null,
+    nfeErro: r.nfe_erro || null, nfeAmbiente: r.nfe_ambiente || null, nfeEmitidaEm: r.nfe_emitida_em || null,
+    nfeCancelMotivo: r.nfe_cancel_motivo || null };
 }
 
 // Comissão de representante: porcentagem padrão por representante
@@ -885,7 +896,12 @@ const CLIENT_FIELDS = [
   { key: "ie", label: "Inscrição Estadual" },
   { key: "cpf", label: "CPF" },
   { key: "cep", label: "CEP" },
-  { key: "address", label: "Endereço" },
+  { key: "logradouro", label: "Rua/Avenida" },
+  { key: "numero", label: "Número" },
+  { key: "complemento", label: "Complemento", optional: true },
+  { key: "bairro", label: "Bairro" },
+  { key: "cidade", label: "Cidade" },
+  { key: "uf", label: "UF" },
   { key: "email", label: "E-mail" },
   { key: "phone", label: "Telefone" },
   { key: "whatsapp", label: "WhatsApp" },
@@ -1459,6 +1475,33 @@ function rowToStockItem(r) {
     persistOrders(next);
   }
 
+  // Emissão de NF-e: quem decide e grava de verdade é a função do servidor
+  // (emit-nfe/cancel-nfe/check-nfe-status), que fala com a Notaas usando a
+  // chave de API guardada no Supabase. Aqui só mandamos o pedido na função e
+  // aplicamos a resposta no estado local — sem re-subir nada pro banco, pra
+  // não sobrescrever o que o servidor já gravou.
+  function aplicarPatchPedido(orderId, patch) {
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...patch } : o)));
+  }
+  async function emitirNfe(orderId) {
+    const { data, error } = await withRetry(() => supabase.functions.invoke("emit-nfe", { body: { orderId } }));
+    if (error || data?.error) { alert(data?.error || "Não foi possível emitir a nota fiscal agora."); return; }
+    if (data?.order) aplicarPatchPedido(orderId, data.order);
+  }
+  async function cancelarNfe(orderId, motivo) {
+    const { data, error } = await withRetry(() => supabase.functions.invoke("cancel-nfe", { body: { orderId, motivo } }));
+    if (error || data?.error) { alert(data?.error || "Não foi possível cancelar a nota fiscal agora."); return; }
+    if (data?.order) aplicarPatchPedido(orderId, data.order);
+  }
+  async function atualizarStatusNfe(orderId) {
+    const { data, error } = await withRetry(() => supabase.functions.invoke("check-nfe-status", { body: { orderId } }));
+    if (error || data?.error) { alert(data?.error || "Não foi possível consultar o status agora."); return; }
+    if (data?.order) aplicarPatchPedido(orderId, data.order);
+  }
+  function vincularClienteAoPedido(orderId, clientId) {
+    persistOrders(orders.map((o) => (o.id === orderId ? { ...o, clientId } : o)));
+  }
+
   // Copia os itens de um pedido existente para um novo pedido, atribuído a
   // outro cliente. É um pedido novo de verdade: abate estoque normalmente e
   // respeita a disponibilidade — se faltar estoque para algum item, a
@@ -1620,7 +1663,7 @@ function rowToStockItem(r) {
       return { model: c.model, category: c.category, color: c.color, size: c.size, qty: c.qty, price: parseBRL(c.price), costPrice: prod ? parseBRL(prod.costPrice) : 0, image: c.image || null, sku: prod?.sku || "", productId: c.productId, variantId: c.variantId, stockType: c.stockType || "pronta" };
     });
     const { data, error } = await withRetry(() => supabase.functions.invoke("finalize-order", {
-      body: { clientName: selectedClient?.buyerName || session.name || session.username, items, note: note || "", paymentCondition: paymentCondition || null },
+      body: { clientName: selectedClient?.buyerName || session.name || session.username, clientId: selectedClient?.id || null, items, note: note || "", paymentCondition: paymentCondition || null },
     }));
     if (error || data?.error) {
       if (data?.shortages?.length) {
@@ -1656,9 +1699,9 @@ function rowToStockItem(r) {
     <div style={{ minHeight: "100vh", background: TOKENS.ivory, fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <TopBar session={session} screen={screen} setScreen={setScreen} onLogout={handleLogout} cartCount={cart.reduce((a, c) => a + c.qty, 0)} onOpenCart={() => setCartOpen(true)} />
       {screen === "admin" && (session.role === "admin" || session.role === "admincentral") ? (
-        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} setOrders={persistOrders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} persistCutBatches={persistCutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} repSettings={repSettings} persistRepSettings={persistRepSettings} repGoals={repGoals} persistRepGoals={persistRepGoals} />
+        <AdminPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} banners={banners} setBanners={persistBanners} settings={settings} setSettings={persistSettings} clients={clients} setClients={persistClients} orders={orders} setOrders={persistOrders} updateStatus={updateOrderStatus} onCopyOrder={copyOrderToCart} stockItems={stockItems} setStockItems={persistStockItems} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} session={session} cutBatches={cutBatches} persistCutBatches={persistCutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} repSettings={repSettings} persistRepSettings={persistRepSettings} repGoals={repGoals} persistRepGoals={persistRepGoals} emitirNfe={emitirNfe} cancelarNfe={cancelarNfe} atualizarStatusNfe={atualizarStatusNfe} vincularClienteAoPedido={vincularClienteAoPedido} />
       ) : screen === "central" && session.role === "admincentral" ? (
-        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} />
+        <AdminCentralPanel users={users} setUsers={persistUsers} products={products} setProducts={persistProducts} orders={orders} updateStatus={updateOrderStatus} clients={clients} onCopyOrder={copyOrderToCart} emitirNfe={emitirNfe} cancelarNfe={cancelarNfe} atualizarStatusNfe={atualizarStatusNfe} vincularClienteAoPedido={vincularClienteAoPedido} />
       ) : screen === "rep-clients" && session.role === "representante" ? (
         <RepClientsPanel clients={clients} setClients={persistClients} session={session} />
       ) : screen === "rep-pedidos" && session.role === "representante" ? (
@@ -2437,7 +2480,7 @@ function PrintableOrder({ cart, showPrice, session, client }) {
 }
 
 /* ---------------- ADMIN (funcionário) ---------------- */
-function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, setOrders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, persistCutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo, repSettings, persistRepSettings, repGoals, persistRepGoals }) {
+function AdminPanel({ users, setUsers, products, setProducts, banners, setBanners, settings, setSettings, clients, setClients, orders, setOrders, updateStatus, onCopyOrder, stockItems, setStockItems, scanReceiveStock, scanCollectOrder, session, cutBatches, persistCutBatches, lancarCorte, garantirProdutoVariante, persistProducts, aprovarCorte, rejeitarCorte, excluirCortes, garantirCorNoCatalogo, repSettings, persistRepSettings, repGoals, persistRepGoals, emitirNfe, cancelarNfe, atualizarStatusNfe, vincularClienteAoPedido }) {
   const tabsAll = [
     { id: "produtos", label: "Produtos & Estoque", icon: Package },
     { id: "itens", label: "Listagem de itens", icon: ListOrdered },
@@ -2474,19 +2517,19 @@ function AdminPanel({ users, setUsers, products, setProducts, banners, setBanner
       {tab === "coleta" && <ColetaEstoqueAdmin orders={orders} products={products} stockItems={stockItems} settings={settings} cutBatches={cutBatches} lancarCorte={lancarCorte} garantirProdutoVariante={garantirProdutoVariante} persistProducts={persistProducts} aprovarCorte={aprovarCorte} rejeitarCorte={rejeitarCorte} excluirCortes={excluirCortes} garantirCorNoCatalogo={garantirCorNoCatalogo} scanReceiveStock={scanReceiveStock} scanCollectOrder={scanCollectOrder} updateStatus={updateStatus} session={session} />}
       {tab === "relatorios-corte" && <RelatoriosCorteAdmin cutBatches={cutBatches} products={products} orders={orders} stockItems={stockItems} />}
       {tab === "catalogo-modelos" && <CatalogoModelosAdmin settings={settings} setSettings={setSettings} products={products} setProducts={setProducts} cutBatches={cutBatches} persistCutBatches={persistCutBatches} stockItems={stockItems} setStockItems={setStockItems} />}
-      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
-      {tab === "representantes-painel" && <RepresentantesAdmin users={users} orders={orders} setOrders={setOrders} repSettings={repSettings} persistRepSettings={persistRepSettings} repGoals={repGoals} persistRepGoals={persistRepGoals} />}
+      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} settings={settings} products={products} emitirNfe={emitirNfe} cancelarNfe={cancelarNfe} atualizarStatusNfe={atualizarStatusNfe} vincularClienteAoPedido={vincularClienteAoPedido} />}
+      {tab === "representantes-painel" &&<RepresentantesAdmin users={users} orders={orders} setOrders={setOrders} repSettings={repSettings} persistRepSettings={persistRepSettings} repGoals={repGoals} persistRepGoals={persistRepGoals} />}
       {tab === "clientes" && <ClientRegistryAdmin clients={clients} setClients={setClients} users={users} repFilterEnabled />}
       {tab === "login-clientes" && <ClientesAdmin users={users} setUsers={setUsers} role="client" title="Login de Clientes" />}
       {tab === "representantes" && <ClientesAdmin users={users} setUsers={setUsers} role="representante" title="Login de Representantes" />}
       {tab === "banners" && <BannersAdmin banners={banners} setBanners={setBanners} />}
-      {tab === "config" && <SettingsAdmin settings={settings} setSettings={setSettings} />}
+      {tab === "config" && <SettingsAdmin settings={settings} setSettings={setSettings} products={products} setProducts={setProducts} />}
     </div>
   );
 }
 
 /* ---------------- ADMIN CENTRAL ---------------- */
-function AdminCentralPanel({ users, setUsers, products, setProducts, orders, updateStatus, clients, onCopyOrder }) {
+function AdminCentralPanel({ users, setUsers, products, setProducts, orders, updateStatus, clients, onCopyOrder, emitirNfe, cancelarNfe, atualizarStatusNfe, vincularClienteAoPedido }) {
   const [tab, setTab] = useState("funcionarios");
   const tabs = [
     { id: "funcionarios", label: "Login de Funcionários", icon: UserCog },
@@ -2514,8 +2557,8 @@ function AdminCentralPanel({ users, setUsers, products, setProducts, orders, upd
       </div>
       {tab === "seguranca" && <AdminCentralSecurity users={users} setUsers={setUsers} />}
       {tab === "funcionarios" && <ClientesAdmin users={users} setUsers={setUsers} role="admin" title="Login de Funcionários" />}
-      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} />}
-      {tab === "ranking" && <RankingAdmin products={products} orders={orders} />}
+      {tab === "pedidos" && <PedidosAdmin orders={orders} updateStatus={updateStatus} clients={clients} onCopyOrder={onCopyOrder} products={products} emitirNfe={emitirNfe} cancelarNfe={cancelarNfe} atualizarStatusNfe={atualizarStatusNfe} vincularClienteAoPedido={vincularClienteAoPedido} />}
+      {tab === "ranking" &&<RankingAdmin products={products} orders={orders} />}
       {tab === "abc" && <ABCAdmin orders={orders} />}
       {tab === "estoque" && <EstoqueCustosAdmin products={products} setProducts={setProducts} />}
       {tab === "vendas-mes" && <VendasMesAdmin orders={orders} />}
@@ -2700,11 +2743,27 @@ function AdminCentralSecurity({ users, setUsers }) {
   );
 }
 
-function SettingsAdmin({ settings, setSettings }) {
+function SettingsAdmin({ settings, setSettings, products = [], setProducts }) {
   const [email, setEmail] = useState(settings.orderEmail || "");
   const [whats, setWhats] = useState(settings.orderWhatsapp || "");
   const [saved, setSaved] = useState(false);
   function save() { setSettings({ ...settings, orderEmail: email.trim(), orderWhatsapp: whats.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1500); }
+
+  const categoriasNcm = settings.categories || DEFAULT_CATEGORIES;
+  const [ncmPorCategoria, setNcmPorCategoria] = useState({});
+  const [aplicandoCat, setAplicandoCat] = useState("");
+  const [aplicadoCat, setAplicadoCat] = useState("");
+  function contarSemNcm(cat) { return products.filter((p) => p.category === cat && !p.ncm).length; }
+  async function aplicarNcmCategoria(cat) {
+    const ncm = (ncmPorCategoria[cat] || "").trim();
+    if (!ncm || !setProducts) return;
+    setAplicandoCat(cat);
+    const next = products.map((p) => (p.category === cat ? { ...p, ncm } : p));
+    await setProducts(next);
+    setAplicandoCat("");
+    setAplicadoCat(cat);
+    setTimeout(() => setAplicadoCat(""), 2000);
+  }
 
   const fe = settings.fiscalEmitente || {};
   const [razaoSocial, setRazaoSocial] = useState(fe.razaoSocial || "");
@@ -2717,13 +2776,22 @@ function SettingsAdmin({ settings, setSettings }) {
   const [cidade, setCidade] = useState(fe.cidade || "");
   const [uf, setUf] = useState(fe.uf || "");
   const [telefone, setTelefone] = useState(fe.telefone || "");
+  const [ambiente, setAmbiente] = useState(fe.ambiente || "teste");
+  const [csosnPadrao, setCsosnPadrao] = useState(fe.csosnPadrao || "");
+  const [cstPadrao, setCstPadrao] = useState(fe.cstPadrao || "");
+  const [formaPagamentoPadrao, setFormaPagamentoPadrao] = useState(fe.formaPagamentoPadrao || "90");
+  const [naturezaOperacaoPadrao, setNaturezaOperacaoPadrao] = useState(fe.naturezaOperacaoPadrao || "Venda de mercadoria");
+  const [origemIcmsPadrao, setOrigemIcmsPadrao] = useState(fe.origemIcmsPadrao || "0");
   const [savedFiscal, setSavedFiscal] = useState(false);
+  const usaCsosn = regimeTributario === "Simples Nacional" || regimeTributario === "MEI";
   function saveFiscal() {
     setSettings({
       ...settings,
       fiscalEmitente: {
         razaoSocial: razaoSocial.trim(), nomeFantasia: nomeFantasia.trim(), cnpj: cnpj.trim(), ie: ie.trim(),
         regimeTributario, cep: cep.trim(), endereco: endereco.trim(), cidade: cidade.trim(), uf: uf.trim(), telefone: telefone.trim(),
+        ambiente, csosnPadrao: csosnPadrao.trim(), cstPadrao: cstPadrao.trim(), formaPagamentoPadrao: formaPagamentoPadrao.trim(),
+        naturezaOperacaoPadrao: naturezaOperacaoPadrao.trim(), origemIcmsPadrao: origemIcmsPadrao.trim(),
       },
     });
     setSavedFiscal(true); setTimeout(() => setSavedFiscal(false), 1500);
@@ -2745,9 +2813,22 @@ function SettingsAdmin({ settings, setSettings }) {
         </div>
       </div>
 
-      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 460 }}>
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 520 }}>
         <div style={{ fontFamily: "Georgia, serif", fontSize: 17, marginBottom: 4 }}>Dados fiscais do emitente</div>
-        <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Dados da empresa que vai emitir a nota fiscal. Preparação para quando a emissão for ativada — por enquanto, nada disso envia nota de verdade.</div>
+        <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Dados da empresa que emite a nota fiscal (via Notaas) no botão "Emitir NF-e" de cada pedido.</div>
+
+        <div style={{ background: ambiente === "producao" ? "#FCEBEB" : "#EAF3DE", border: `1px solid ${ambiente === "producao" ? "#A5453F" : TOKENS.ok}`, borderRadius: 4, padding: 14, marginBottom: 16 }}>
+          <FieldLabel>Ambiente</FieldLabel>
+          <select value={ambiente} onChange={(e) => setAmbiente(e.target.value)} style={inputStyle}>
+            <option value="teste">Teste — "Emitir NF-e" fica bloqueado, nada é enviado à SEFAZ</option>
+            <option value="producao">Produção — nota real, com valor jurídico, enviada à SEFAZ</option>
+          </select>
+          <div style={{ fontSize: 11, color: ambiente === "producao" ? "#791F1F" : "#27500A", marginTop: 6, lineHeight: 1.5 }}>
+            {ambiente === "producao"
+              ? "Atenção: a Notaas não tem um modo de testes separado — toda nota emitida com isto em Produção é real e só pode ser cancelada em até 24h. Só mude para aqui quando o CNPJ, o certificado digital A1 e a chave de API estiverem configurados de verdade."
+              : "Enquanto estiver em Teste, o botão \"Emitir NF-e\" nos pedidos fica bloqueado — você pode preencher e revisar tudo (cliente, NCM, CFOP) com calma, sem risco de emitir nota real por engano."}
+          </div>
+        </div>
 
         <FieldLabel>Razão social</FieldLabel>
         <input value={razaoSocial} onChange={(e) => setRazaoSocial(e.target.value)} style={inputStyle} placeholder="Ex: Mallo Confecções LTDA" />
@@ -2799,8 +2880,64 @@ function SettingsAdmin({ settings, setSettings }) {
         <FieldLabel>Telefone</FieldLabel>
         <input value={telefone} onChange={(e) => setTelefone(e.target.value)} style={inputStyle} placeholder="71 99999-9999" />
 
+        <div style={{ borderTop: `1px solid ${TOKENS.line}`, marginTop: 16, paddingTop: 16 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.ink, marginBottom: 2 }}>Valores padrão da NF-e</div>
+          <div style={{ fontSize: 11, color: TOKENS.graphite, marginBottom: 12 }}>Defina com o contador antes de emitir qualquer nota de verdade.</div>
+
+          <FieldLabel>{usaCsosn ? "CSOSN padrão (Simples Nacional / MEI)" : "CST padrão (ICMS)"}</FieldLabel>
+          {usaCsosn ? (
+            <input value={csosnPadrao} onChange={(e) => setCsosnPadrao(e.target.value)} style={inputStyle} placeholder="Ex: 102" />
+          ) : (
+            <input value={cstPadrao} onChange={(e) => setCstPadrao(e.target.value)} style={inputStyle} placeholder="Ex: 00" />
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <FieldLabel>Origem do ICMS padrão</FieldLabel>
+              <select value={origemIcmsPadrao} onChange={(e) => setOrigemIcmsPadrao(e.target.value)} style={inputStyle}>
+                <option value="0">0 — Nacional</option>
+                <option value="1">1 — Estrangeira, importação direta</option>
+                <option value="2">2 — Estrangeira, adquirida no mercado interno</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <FieldLabel>Forma de pagamento padrão</FieldLabel>
+              <select value={formaPagamentoPadrao} onChange={(e) => setFormaPagamentoPadrao(e.target.value)} style={inputStyle}>
+                <option value="90">90 — Sem pagamento</option>
+                <option value="01">01 — Dinheiro</option>
+                <option value="15">15 — Boleto bancário</option>
+                <option value="17">17 — Transferência/PIX</option>
+                <option value="99">99 — Outros</option>
+              </select>
+            </div>
+          </div>
+
+          <FieldLabel>Natureza da operação</FieldLabel>
+          <input value={naturezaOperacaoPadrao} onChange={(e) => setNaturezaOperacaoPadrao(e.target.value)} style={inputStyle} placeholder="Ex: Venda de mercadoria" />
+        </div>
+
         <button onClick={saveFiscal} style={{ ...btnPrimary, marginTop: 16 }}><Check size={15} /> Salvar dados fiscais</button>
         {savedFiscal && <span style={{ marginLeft: 10, fontSize: 12, color: TOKENS.ok }}>Salvo!</span>}
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${TOKENS.line}`, borderRadius: 4, padding: 22, maxWidth: 640 }}>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 17, marginBottom: 4 }}>NCM por categoria</div>
+        <div style={{ fontSize: 12, color: TOKENS.graphite, marginBottom: 16 }}>Preencha o NCM de uma categoria e aplique de uma vez em todos os produtos dela. Isso sobrescreve o NCM atual de cada produto da categoria, inclusive os que já tinham um valor diferente.</div>
+        {categoriasNcm.map((cat) => {
+          const semNcm = contarSemNcm(cat);
+          return (
+            <div key={cat} style={{ display: "flex", alignItems: "flex-end", gap: 8, marginBottom: 10 }}>
+              <div style={{ flex: 1 }}>
+                <FieldLabel>{cat} — {semNcm > 0 ? `${semNcm} produto(s) sem NCM` : "todos com NCM"}</FieldLabel>
+                <input value={ncmPorCategoria[cat] || ""} onChange={(e) => setNcmPorCategoria((s) => ({ ...s, [cat]: e.target.value }))} style={inputStyle} placeholder="Ex: 6104.63.00" />
+              </div>
+              <button onClick={() => aplicarNcmCategoria(cat)} disabled={!(ncmPorCategoria[cat] || "").trim() || aplicandoCat === cat} style={{ ...btnGhostSmall, whiteSpace: "nowrap", opacity: (ncmPorCategoria[cat] || "").trim() ? 1 : 0.5 }}>
+                {aplicandoCat === cat ? "Aplicando..." : "Aplicar a todos"}
+              </button>
+              {aplicadoCat === cat && <span style={{ fontSize: 11, color: TOKENS.ok, whiteSpace: "nowrap" }}>Aplicado!</span>}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2820,7 +2957,7 @@ function ClientRegistryAdmin({ clients, setClients, users, repFilterEnabled, rep
     : repFilter === "__none__" ? clients.filter((c) => !c.repUsername)
     : clients.filter((c) => c.repUsername === repFilter);
 
-  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", razaoSocial: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", email: "", phone: "", whatsapp: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
+  function startNew() { setEditing({ id: uid("cl_"), buyerName: "", razaoSocial: "", cnpj: "", ie: "", cpf: "", cep: "", address: "", logradouro: "", numero: "", complemento: "", bairro: "", cidade: "", uf: "", codigoIbge: "", email: "", phone: "", whatsapp: "", instagram: "", references: "", repUsername: repScope || "" }); setShowForm(true); }
   function startEdit(c) { setEditing({ ...c }); setShowForm(true); }
   function remove(id) { if (confirm("Remover este cliente do cadastro?")) setClients(clients.filter((c) => c.id !== id)); }
   function save(c) {
@@ -2899,12 +3036,44 @@ const ORDER_STATUS_COLORS = {
   "Pedido cancelado": { bg: "#F3DCDC", fg: "#6E2C2C" },
 };
 
-function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients = [], onCopyOrder }) {
+const NFE_STATUS_INFO = {
+  processing: { label: "Processando na SEFAZ", bg: "#EEEDFE", fg: "#3C3489" },
+  issued: { label: "Nota emitida", bg: "#EAF3DE", fg: "#1F4E10" },
+  error: { label: "Erro na emissão", bg: "#FCEBEB", fg: "#791F1F" },
+  cancelling: { label: "Cancelando...", bg: "#FAEEDA", fg: "#633806" },
+  cancelled: { label: "Nota cancelada", bg: "#F3DCDC", fg: "#6E2C2C" },
+};
+
+function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients = [], onCopyOrder, products = [], emitirNfe, cancelarNfe, atualizarStatusNfe, vincularClienteAoPedido }) {
   const list = (scopeUsername ? orders.filter((o) => o.sellerUsername === scopeUsername) : orders).slice().reverse();
   const [downloadingId, setDownloadingId] = useState("");
   const [copyModalOrder, setCopyModalOrder] = useState(null);
   const [copyClientId, setCopyClientId] = useState("");
   const [expandedId, setExpandedId] = useState("");
+  const [nfeLoadingId, setNfeLoadingId] = useState("");
+  const [vincularSelecao, setVincularSelecao] = useState({});
+  const [cancelModalOrder, setCancelModalOrder] = useState(null);
+  const [cancelMotivo, setCancelMotivo] = useState("");
+  const podeEmitirNfe = !!emitirNfe;
+
+  async function handleEmitirNfe(orderId) {
+    setNfeLoadingId(orderId);
+    await emitirNfe(orderId);
+    setNfeLoadingId("");
+  }
+  async function handleAtualizarStatus(orderId) {
+    setNfeLoadingId(orderId);
+    await atualizarStatusNfe(orderId);
+    setNfeLoadingId("");
+  }
+  async function confirmarCancelamentoNfe() {
+    if (!cancelModalOrder || cancelMotivo.trim().length < 15) return;
+    setNfeLoadingId(cancelModalOrder.id);
+    await cancelarNfe(cancelModalOrder.id, cancelMotivo.trim());
+    setNfeLoadingId("");
+    setCancelModalOrder(null);
+    setCancelMotivo("");
+  }
 
   async function downloadOrderPdf(o) {
     setDownloadingId(o.id);
@@ -2992,6 +3161,49 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
                   )}
                 </div>
               )}
+              {podeEmitirNfe && !isCancelled && (
+                <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingTop: 8, borderTop: `1px dashed ${TOKENS.line}` }}>
+                  <span style={{ fontSize: 10.5, color: TOKENS.graphite, textTransform: "uppercase", letterSpacing: 0.5 }}>Nota fiscal</span>
+                  {o.nfeStatus && (
+                    <span style={{ fontSize: 11.5, padding: "3px 9px", borderRadius: 3, background: (NFE_STATUS_INFO[o.nfeStatus] || {}).bg || TOKENS.ivorySoft, color: (NFE_STATUS_INFO[o.nfeStatus] || {}).fg || TOKENS.graphite }}>
+                      {(NFE_STATUS_INFO[o.nfeStatus] || {}).label || o.nfeStatus}
+                      {o.nfeNumero ? ` · nº ${o.nfeNumero}` : ""}
+                    </span>
+                  )}
+                  {!o.nfeInvoiceId && !o.clientId && (
+                    <>
+                      <select value={vincularSelecao[o.id] || ""} onChange={(e) => setVincularSelecao((s) => ({ ...s, [o.id]: e.target.value }))} style={{ fontSize: 12, padding: "5px 6px", borderRadius: 3, border: `1px solid ${TOKENS.line}`, maxWidth: 220 }}>
+                        <option value="">Vincular cliente do cadastro...</option>
+                        {clients.map((c) => <option key={c.id} value={c.id}>{c.buyerName}{c.cnpj ? ` — ${c.cnpj}` : ""}</option>)}
+                      </select>
+                      <button onClick={() => vincularClienteAoPedido(o.id, vincularSelecao[o.id])} disabled={!vincularSelecao[o.id]} style={{ ...btnGhostSmall, opacity: vincularSelecao[o.id] ? 1 : 0.5 }}>Vincular</button>
+                    </>
+                  )}
+                  {!o.nfeInvoiceId && o.clientId && (
+                    <button onClick={() => handleEmitirNfe(o.id)} disabled={nfeLoadingId === o.id} style={btnGhostSmall}>
+                      <FileText size={13} /> {nfeLoadingId === o.id ? "Emitindo..." : "Emitir NF-e"}
+                    </button>
+                  )}
+                  {o.nfeStatus === "error" && o.nfeErro && <span style={{ fontSize: 11, color: "#791F1F" }}>{o.nfeErro}</span>}
+                  {o.nfeStatus === "error" && (
+                    <button onClick={() => handleEmitirNfe(o.id)} disabled={nfeLoadingId === o.id} style={btnGhostSmall}>
+                      {nfeLoadingId === o.id ? "Emitindo..." : "Tentar emitir de novo"}
+                    </button>
+                  )}
+                  {(o.nfeStatus === "processing" || o.nfeStatus === "cancelling") && (
+                    <button onClick={() => handleAtualizarStatus(o.id)} disabled={nfeLoadingId === o.id} style={btnGhostSmall}>
+                      {nfeLoadingId === o.id ? "Consultando..." : "Atualizar status"}
+                    </button>
+                  )}
+                  {o.nfeStatus === "issued" && (
+                    <>
+                      {o.nfePdfUrl && <a href={o.nfePdfUrl} target="_blank" rel="noreferrer" style={{ ...btnGhostSmall, textDecoration: "none" }}>DANFE (PDF)</a>}
+                      {o.nfeXmlUrl && <a href={o.nfeXmlUrl} target="_blank" rel="noreferrer" style={{ ...btnGhostSmall, textDecoration: "none" }}>XML</a>}
+                      <button onClick={() => { setCancelModalOrder(o); setCancelMotivo(""); }} style={{ ...btnGhostSmall, color: "#A5453F" }}>Cancelar nota</button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -3018,6 +3230,31 @@ function PedidosAdmin({ orders, updateStatus, scopeUsername, readOnly, clients =
             <div style={modalFooterStyle}>
               <button onClick={() => setCopyModalOrder(null)} style={btnGhostSmall}>Cancelar</button>
               <button onClick={confirmCopy} disabled={!copyClientId} style={{ ...btnPrimary, opacity: copyClientId ? 1 : 0.5, cursor: copyClientId ? "pointer" : "not-allowed" }}>Copiar pedido</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cancelModalOrder && (
+        <div style={overlayStyle}>
+          <div style={{ ...modalStyle, maxWidth: 440 }}>
+            <div style={modalHeaderStyle}>
+              <div style={{ fontFamily: "Georgia, serif", fontSize: 16 }}>Cancelar nota fiscal</div>
+              <button onClick={() => setCancelModalOrder(null)} style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.graphite }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: 20 }}>
+              <div style={{ fontSize: 12.5, color: TOKENS.graphite, marginBottom: 14, lineHeight: 1.5 }}>
+                Pedido de "{cancelModalOrder.clientName}". O cancelamento na SEFAZ só é aceito em até 24h depois da emissão, e precisa de uma justificativa com pelo menos 15 caracteres.
+              </div>
+              <FieldLabel>Motivo do cancelamento</FieldLabel>
+              <textarea value={cancelMotivo} onChange={(e) => setCancelMotivo(e.target.value)} style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} placeholder="Ex: Cancelamento solicitado por erro de digitação nos dados do pedido" />
+              <div style={{ fontSize: 11, color: cancelMotivo.trim().length < 15 ? "#A5453F" : TOKENS.graphite, marginTop: 4 }}>{cancelMotivo.trim().length}/15 caracteres mínimos</div>
+            </div>
+            <div style={modalFooterStyle}>
+              <button onClick={() => setCancelModalOrder(null)} style={btnGhostSmall}>Voltar</button>
+              <button onClick={confirmarCancelamentoNfe} disabled={cancelMotivo.trim().length < 15 || nfeLoadingId === cancelModalOrder.id} style={{ ...btnPrimary, background: "#A5453F", opacity: cancelMotivo.trim().length < 15 ? 0.5 : 1 }}>
+                {nfeLoadingId === cancelModalOrder.id ? "Cancelando..." : "Confirmar cancelamento"}
+              </button>
             </div>
           </div>
         </div>
@@ -3289,7 +3526,13 @@ function ClientForm({ initial, onCancel, onSave }) {
           ...s,
           razaoSocial: s.razaoSocial || dados.razao_social || dados.nome_fantasia || s.razaoSocial,
           cep: s.cep || (dados.cep ? maskCEP(String(dados.cep)) : s.cep),
-          address: s.address || [dados.logradouro, dados.numero, dados.bairro, dados.municipio, dados.uf].filter(Boolean).join(", "),
+          logradouro: s.logradouro || dados.logradouro || s.logradouro,
+          numero: s.numero || dados.numero || s.numero,
+          complemento: s.complemento || dados.complemento || s.complemento,
+          bairro: s.bairro || dados.bairro || s.bairro,
+          cidade: s.cidade || dados.municipio || s.cidade,
+          uf: s.uf || dados.uf || s.uf,
+          codigoIbge: s.codigoIbge || (dados.codigo_municipio_ibge ? String(dados.codigo_municipio_ibge) : s.codigoIbge),
         }));
       } else {
         setCnpjNaoEncontrado(true);
@@ -3308,18 +3551,27 @@ function ClientForm({ initial, onCancel, onSave }) {
       const dados = await buscarCEP(digits);
       setBuscando("");
       if (dados) {
-        setC((s) => ({ ...s, address: [dados.logradouro, dados.bairro, dados.localidade, dados.uf].filter(Boolean).join(", ") }));
+        setC((s) => ({
+          ...s,
+          logradouro: dados.logradouro || s.logradouro,
+          complemento: dados.complemento || s.complemento,
+          bairro: dados.bairro || s.bairro,
+          cidade: dados.localidade || s.cidade,
+          uf: dados.uf || s.uf,
+          codigoIbge: dados.ibge || s.codigoIbge,
+        }));
       }
     }
   }
 
   function trySave() {
     const novosErros = {};
-    CLIENT_FIELDS.forEach((f) => { if (!c[f.key] || !String(c[f.key]).trim()) novosErros[f.key] = true; });
+    CLIENT_FIELDS.forEach((f) => { if (!f.optional && (!c[f.key] || !String(c[f.key]).trim())) novosErros[f.key] = true; });
     if (c.cnpj && !isValidCNPJ(c.cnpj)) { novosErros.cnpj = true; setCnpjInvalido(true); }
     setErros(novosErros);
     if (Object.keys(novosErros).length > 0) return;
-    onSave(c);
+    const address = [c.logradouro, c.numero, c.complemento, c.bairro, c.cidade, c.uf].filter(Boolean).join(", ");
+    onSave({ ...c, address });
   }
 
   return (
@@ -3341,7 +3593,7 @@ function ClientForm({ initial, onCancel, onSave }) {
             return (
               <div key={f.key}>
                 <FieldLabel>
-                  {f.label} <span style={{ color: "#A5453F" }}>*</span> {buscando === f.key && <span style={{ color: TOKENS.wine, fontWeight: 400 }}>· buscando...</span>}
+                  {f.label} {!f.optional && <span style={{ color: "#A5453F" }}>*</span>} {buscando === f.key && <span style={{ color: TOKENS.wine, fontWeight: 400 }}>· buscando...</span>}
                 </FieldLabel>
                 {f.key === "references" ? (
                   <textarea value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={{ ...estilo, minHeight: 60, resize: "vertical" }} />
@@ -3349,6 +3601,8 @@ function ClientForm({ initial, onCancel, onSave }) {
                   <input value={c.cnpj || ""} onChange={(e) => handleCnpjChange(e.target.value)} placeholder="Números (ou letras, no novo CNPJ alfanumérico)" style={estilo} />
                 ) : f.key === "cep" ? (
                   <input value={c.cep || ""} onChange={(e) => handleCepChange(e.target.value)} placeholder="Só os números" style={estilo} />
+                ) : f.key === "uf" ? (
+                  <input value={c.uf || ""} onChange={(e) => setC({ ...c, uf: e.target.value.toUpperCase().slice(0, 2) })} maxLength={2} placeholder="Ex: BA" style={estilo} />
                 ) : (
                   <input value={c[f.key]} onChange={(e) => setC({ ...c, [f.key]: e.target.value })} style={estilo} />
                 )}
